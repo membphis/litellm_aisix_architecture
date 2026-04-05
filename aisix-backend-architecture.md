@@ -1051,126 +1051,31 @@ pub enum ErrorKind {
 ### YAML Schema 示例
 
 ```yaml
-version: 1
+# aisix-gateway.yaml — 进程启动配置
+# 仅包含启动时静态所需内容。
+# Provider、Model Group、Virtual Key、Limits、Guardrail 等运行时配置
+# 均由 aisix-admin 写入 etcd，aisix-gateway 启动后通过 watch 动态加载。
 
 server:
   listen: "0.0.0.0:4000"
   request_body_limit_mb: 8
   response_body_limit_mb: 64
-  force_ipv4: false
 
-providers:
-  - id: openai-us
-    kind: openai
-    base_url: "https://api.openai.com"
-    auth:
-      secret_ref: "env:OPENAI_API_KEY"
-    models:
-      - alias: "gpt-4o-mini"
-        provider_model: "gpt-4o-mini"
-        input_price_micros_usd: 150
-        output_price_micros_usd: 600
-        capabilities: [chat, responses, embeddings]
+etcd:
+  endpoints:
+    - "http://etcd:2379"
+  prefix: "/aisix"
+  dial_timeout_ms: 5000
 
-  - id: azure-eastus
-    kind: azure_openai
-    base_url: "https://myazure.openai.azure.com"
-    auth:
-      secret_ref: "vault:kv/azure-openai"
-    models:
-      - alias: "gpt-4o-mini"
-        provider_model: "gpt-4o-mini-prod"
+log:
+  level: "info"          # trace / debug / info / warn / error
 
-  - id: anthropic
-    kind: anthropic
-    base_url: "https://api.anthropic.com"
-    auth:
-      secret_ref: "env:ANTHROPIC_API_KEY"
-    models:
-      - alias: "claude-sonnet"
-        provider_model: "claude-sonnet-4-20250514"
-        input_price_micros_usd: 300
-        output_price_micros_usd: 1500
-        capabilities: [chat]
-
-model_groups:
-  - name: "default-fast-chat"
-    match:
-      aliases: ["gpt-4o-mini", "gpt-4o*"]
-    strategy: "least_busy"
-    fallbacks: ["default-cheap-chat"]
-    routes:
-      - target: "openai-us/gpt-4o-mini"
-        weight: 70
-        tags: ["primary", "us"]
-        rpm: 200
-        tpm: 200000
-      - target: "azure-eastus/gpt-4o-mini"
-        weight: 30
-        tags: ["backup", "azure"]
-
-  - name: "default-cheap-chat"
-    match:
-      aliases: ["gpt-3.5-turbo"]
-    strategy: "simple_shuffle"
-    routes:
-      - target: "openai-us/gpt-3.5-turbo"
-        weight: 100
-
-auth:
-  virtual_keys:
-    enabled: true
-  jwt:
-    enabled: true
-    jwks_url: "https://issuer/.well-known/jwks.json"
-  ip_filter:
-    allow_cidrs: ["10.0.0.0/8"]
-
-limits:
-  global:
-    rpm: 100000
-  by_key:
-    default:
-      rpm: 600
-      tpm: 300000
-      concurrent: 20
-      monthly_budget_usd: 500
-
-cache:
-  default_backend: "redis"
-  key_fields: ["model", "messages", "tools", "temperature"]
-  backends:
-    redis:
-      url: "redis://redis:6379"
-      ttl_seconds: 300
-
-guardrails:
-  - name: "pii-redact"
-    mode: "pre_call"
-    default_on: true
-    endpoint: "https://guard.internal/pii/redact"
-    timeout_ms: 200
-    secret_ref: "env:GUARD_API_KEY"
-  - name: "output-policy"
-    mode: "post_call"
-    endpoint: "https://guard.internal/content/check"
-    timeout_ms: 500
-
-observability:
-  prometheus: true
-  otel: true
-  callbacks:
-    - kind: langfuse
-      endpoint: "https://langfuse.internal"
-      secret_ref: "env:LANGFUSE_KEY"
-    - kind: datadog
-      endpoint: "https://datadog.internal"
-      api_key_ref: "env:DD_API_KEY"
-    - kind: webhook
-      endpoint: "https://my-service/webhook"
-      headers:
-        Authorization: "Bearer {{secret:env:WEBHOOK_TOKEN}}"
+runtime:
+  worker_threads: 4      # tokio worker 线程数，0 = CPU 核心数
+  max_blocking_threads: 64
 ```
+
+运行时配置（Provider、Model Group、Virtual Key、Limits、Guardrail 等）的数据结构见下方 [etcd 数据模型](#etcd-数据模型)。
 
 ### etcd 数据模型
 
