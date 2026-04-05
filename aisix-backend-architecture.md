@@ -165,26 +165,20 @@ pub struct Usage {
 
 ### Virtual Key 元数据（KeyMeta）
 
-`KeyMeta` 在 Authentication 阶段从 etcd 快照中按 key hash 加载，注入 `RequestContext`。它只保存**身份标识**和**功能开关**；具体配置（限速阈值、模型列表、预算等）保留在快照中，各 pipeline stage 按 id 按需查找。
+`KeyMeta` 在 Authentication 阶段从 etcd 快照中按 key hash 加载，注入 `RequestContext`。它只保存**身份标识**；具体配置（限速阈值、guardrail 规则、缓存策略、预算等）保留在快照中，各 pipeline stage 按 id 按需查找，自行决定是否有实际操作。
 
 ```rust
 // ===== aisix-types =====
 
 /// Virtual Key 元数据：从 etcd 快照中加载，Authentication 后注入 RequestContext
-/// 只保存身份标识和功能开关；具体配置（限速阈值、模型列表、预算等）
-/// 保留在快照中，各 pipeline stage 按 id 按需查找
+/// 只保存身份标识；各阶段所需的具体配置（限速阈值、guardrail 规则、缓存策略等）
+/// 保留在快照中，各 pipeline stage 按 id 按需查找，自行决定是否有实际操作
 pub struct KeyMeta {
     // ── 身份标识（供各 stage 按 id 查快照）──────────
     pub key_id:      String,          // bearer token 的 hash，索引键
     pub team_id:     Option<String>,  // 查 team 层级策略
     pub user_id:     Option<String>,
     pub customer_id: Option<String>,  // 最终用户标识（x-litellm-end-user）
-
-    // ── 功能开关（Authentication 后驱动 build_pipeline）──
-    pub rate_limit_enabled:      bool,
-    pub cache_enabled:           bool,
-    pub guardrail_enabled:       bool,
-    pub prompt_template_enabled: bool,
 
     // ── 元信息 ────────────────────────────────────────
     pub alias:      Option<String>,   // 用户自定义备注名
@@ -608,29 +602,13 @@ send request ──▶ upstream A
 
 ---
 
-### 4.6 Pipeline 动态组合
+### 4.6 Pipeline 执行模型
 
-> **核心问题**：不同 API Key 启用的功能不同（用户 A 只限流，用户 B 限流 + 缓存），pipeline 需要根据 key 配置动态组合，而不是对所有请求执行相同的固定阶段。
-
-#### 核心抽象
-
-```rust
-/// 每个 pipeline 阶段实现此 trait
-#[async_trait]
-trait PipelineStage: Send + Sync {
-    async fn process(&self, ctx: &mut RequestContext) -> Result<Flow, GatewayError>;
-}
-
-/// 阶段执行结果
-enum Flow {
-    Continue,            // 继续执行下一阶段
-    Respond(Response),   // 短路，直接返回此响应给客户端
-}
-```
+> **设计原则**：所有请求走相同的固定阶段序列。每个阶段内部查询配置快照，有配置则执行实际操作，无配置则 no-op。不需要外部 bool 开关，不需要动态组合 stage 列表。
 
 #### RequestContext：贯穿全程的请求上下文
 
-每个阶段不再各自接收散乱的参数，统一读写同一个上下文，随着 pipeline 推进逐步填充：
+每个阶段统一读写同一个上下文，随着 pipeline 推进逐步填充：
 
 ```rust
 struct RequestContext {
@@ -638,8 +616,7 @@ struct RequestContext {
     raw_request: ChatCompletionRequest,
 
     // ── Authentication 后填入 ───────────────────────
-    key_meta: KeyMeta,           // 控制面配置的入口：权限 + 功能开关 + 限额
-                                 // 决定 build_pipeline 组合哪些可选阶段
+    key_meta: KeyMeta,           // 身份标识，各阶段按 id 查配置快照
 
     // ── RouteSelect 后填入 ──────────────────────────
     selected_upstream: Upstream,
@@ -650,81 +627,50 @@ struct RequestContext {
 }
 ```
 
-`key_meta` 是整个 pipeline 的配置枢纽：它由控制面在创建 Virtual Key 时定义，Authentication 阶段从不可变快照中加载后注入此处，之后限流、缓存、guardrail 等所有可选阶段都从中读取自己需要的配置，无需再访问全局状态。
+#### 固定阶段序列
 
-#### 固定阶段 vs 可选阶段
+所有请求都走以下固定顺序。每个阶段内部按 `key_meta` id 查快照，无配置则直接返回 `Ok(())` 继续下一阶段：
 
-| 类型 | 阶段 | 说明 |
-|------|------|------|
-| **固定**（所有请求都走） | Authentication | 无法跳过，不认证不知道是谁 |
-| **固定** | Authorization | 无法跳过，不鉴权不知道能做什么 |
-| **固定** | RouteSelect | 无法跳过，不选上游无法转发 |
-| **固定** | UpstreamHeaders | 无法跳过，上游鉴权头必须拼装 |
-| **固定** | StreamChunk | 无法跳过，核心代理逻辑 |
-| **固定** | OnError | 无法跳过，错误必须有响应 |
-| **可选** | PreCall Guardrail | key_meta.guardrail_enabled |
-| **可选** | RateLimit | key_meta.rate_limit_enabled |
-| **可选** | Cache Lookup | key_meta.cache_enabled |
-| **可选** | PreUpstream | key_meta.prompt_template_enabled |
-
-#### build_pipeline：动态组合
-
-Authentication 完成后，根据 `key_meta` 的功能配置动态组装当次请求的 stage 列表：
-
-```rust
-fn build_pipeline(key_meta: &KeyMeta, state: &AppState) -> Vec<Box<dyn PipelineStage>> {
-    // 固定阶段：始终执行，顺序不可变
-    let mut stages: Vec<Box<dyn PipelineStage>> = vec![
-        Box::new(AuthorizationStage::new(&state)),
-    ];
-
-    // 可选阶段：根据 key 配置决定是否加入
-    if key_meta.rate_limit_enabled {
-        stages.push(Box::new(RateLimitStage::new(&state)));
-    }
-    if key_meta.guardrail_enabled {
-        stages.push(Box::new(GuardrailStage::new(&state)));
-    }
-    if key_meta.cache_enabled {
-        stages.push(Box::new(CacheLookupStage::new(&state)));
-    }
-    if key_meta.prompt_template_enabled {
-        stages.push(Box::new(PreUpstreamStage::new(&state)));
-    }
-
-    // 固定阶段：核心转发，始终在最后
-    stages.push(Box::new(RouteSelectStage::new(&state)));
-    stages.push(Box::new(UpstreamHeadersStage::new(&state)));
-    stages.push(Box::new(StreamChunkStage::new(&state)));
-    stages.push(Box::new(PostCallStage::new(&state)));
-
-    stages
-}
-```
+| 阶段 | 说明 |
+|------|------|
+| Authentication | axum Extractor，解析 Bearer token，加载 KeyMeta |
+| Authorization | 检查 key 是否有权访问目标模型/路由 |
+| RateLimit | 按 key/team/user 查限速配置；有配置则查 Redis，无配置则 no-op |
+| PreCall Guardrail | 查 guardrail 规则；有配置则调外部 HTTP callback，无配置则 no-op |
+| Cache Lookup | 查缓存策略；有配置则查 Redis/语义缓存，命中则短路返回，无配置则 no-op |
+| PreUpstream | 查 prompt template 配置；有则渲染注入，无则 no-op |
+| RouteSelect | 按路由策略选上游 provider + model |
+| UpstreamHeaders | 拼装上游鉴权头（API key 等） |
+| StreamChunk | 转发请求，流式/非流式代理核心逻辑 |
+| PostCall | 异步：扣费、写日志，不阻塞响应 |
 
 #### Handler 入口
+
+直接顺序调用，无抽象层：
 
 ```rust
 async fn chat_completions(
     State(state): State<AppState>,
-    AuthenticatedKey(key_meta): AuthenticatedKey,  // 固定：Authentication（Extractor）
-    Json(raw_request): Json<ChatCompletionRequest>, // 固定：Decode（axum 自动完成）
+    AuthenticatedKey(key_meta): AuthenticatedKey,  // Authentication（Extractor）
+    Json(raw_request): Json<ChatCompletionRequest>, // Decode（axum 自动完成）
 ) -> Result<Response, GatewayError> {
-    let mut ctx = RequestContext::new(raw_request, key_meta.clone());
+    let mut ctx = RequestContext::new(raw_request, key_meta);
 
-    // 根据 key_meta 动态组装 pipeline
-    let pipeline = build_pipeline(&key_meta, &state);
-
-    // 顺序执行，任意阶段可短路返回
-    for stage in &pipeline {
-        match stage.process(&mut ctx).await? {
-            Flow::Continue => {}
-            Flow::Respond(resp) => return Ok(resp),
-        }
+    authorization::check(&ctx, &state)?;
+    rate_limit::check(&ctx, &state).await?;      // 有配置则查 Redis，否则 no-op
+    guardrail::pre_call(&ctx, &state).await?;    // 有配置则调 HTTP callback，否则 no-op
+    if let Some(resp) = cache::lookup(&ctx, &state).await? {
+        tokio::spawn(post_call::run(ctx, state)); // 异步计费/日志
+        return Ok(resp);
     }
+    pre_upstream::apply(&mut ctx, &state)?;      // 有配置则渲染 prompt template，否则 no-op
+    route_select::resolve(&mut ctx, &state)?;
+    upstream_headers::inject(&mut ctx, &state)?;
 
-    // 正常情况不会走到这里（StreamChunkStage 会 Respond）
-    Err(GatewayError::Internal("pipeline did not produce a response"))
+    let resp = stream_chunk::proxy(&mut ctx, &state).await?;
+
+    tokio::spawn(post_call::run(ctx, state));     // 异步：扣费 + 写日志，不阻塞响应
+    Ok(resp)
 }
 ```
 
@@ -734,17 +680,16 @@ async fn chat_completions(
 
 ```
 src/pipeline/
-├── mod.rs              // PipelineStage trait, Flow, build_pipeline
 ├── context.rs          // RequestContext definition
-├── authorization.rs    // AuthorizationStage
-├── guardrail.rs        // GuardrailStage
-├── rate_limit.rs       // RateLimitStage
-├── cache_lookup.rs     // CacheLookupStage
-├── pre_upstream.rs     // PreUpstreamStage
-├── route_select.rs     // RouteSelectStage
-├── upstream_headers.rs // UpstreamHeadersStage
-├── stream_chunk.rs     // StreamChunkStage
-└── post_call.rs        // PostCallStage
+├── authorization.rs
+├── guardrail.rs
+├── rate_limit.rs
+├── cache.rs
+├── pre_upstream.rs
+├── route_select.rs
+├── upstream_headers.rs
+├── stream_chunk.rs
+└── post_call.rs
 ```
 
 ---
