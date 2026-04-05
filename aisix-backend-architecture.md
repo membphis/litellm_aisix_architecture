@@ -18,9 +18,9 @@
 | **HTTP 框架** | axum + tower + hyper | Tower 中间件生态最好，hyper 底层零拷贝流式支持 |
 | **架构模式** | 数据面/控制面硬分离 | 学习 APISIX 核心经验：请求路径不混入配置管理 |
 | **配置同步** | etcd 协议（标准 etcd 集群） | 数据面只依赖 etcd 协议，watch 语义可靠，MVCC 天然保证一致性 |
-| **分发策略** | 热路径用枚举静态分发，扩展点用 HTTP callback | 保留 Rust 最大性能优势，无需动态插件系统 |
+| **分发策略** | Provider 用 `Arc<dyn ProviderCodec>`，扩展点用 HTTP callback | 可读性优先；Provider 列表有限且固定，dyn dispatch 开销在 AI 请求秒级延迟前可忽略 |
 | **状态模型** | 不可变编译快照 + ArcSwap 原子切换 | 配置热加载零停机，无读写锁竞争 |
-| **流式代理** | 零拷贝直通 + 按需转码 | OpenAI 兼容上游直接隧道，非兼容上游才转码 |
+| **流式代理** | 统一解析转发 | 所有上游格式统一解析为 StreamEvent，再渲染为 OpenAI SSE；无需维护两条代码路径 |
 | **Guardrails** | 内置 HTTP callback 引擎 | 不引入插件系统，guardrail 即外部 HTTP 服务调用 |
 | **扩展方式** | 内置服务 + 外部 HTTP callback | 编译时类型安全，不牺牲性能 |
 
@@ -109,15 +109,30 @@
 | **配置回滚** | etcd 历史版本天然支持，无需额外实现 |
 | **APISIX 生态兼容** | 天然兼容 APISIX 控制面生态 |
 
+### 控制面（aisix-admin）
+
+**aisix-admin** 是独立服务，与 aisixd 完全分离：
+
+| 维度 | aisix-admin（控制面） | aisixd（数据面） |
+|------|----------------------|-----------------|
+| **职责** | 写 etcd / PostgreSQL | 只读 etcd |
+| **API** | Admin REST API（CRUD 配置实体） | LLM Proxy API（/v1/...） |
+| **LLM 流量** | 不处理 | 全部处理 |
+| **通信** | 写入 etcd | Watch etcd 变更 |
+
+两者通过 etcd 解耦：aisix-admin 写，aisixd 读，互不直接调用。
+
+aisix-admin 管理的实体包括：Provider 配置、Virtual Key、Team/Member、Model Group、限流策略、Guardrail 规则等。MVP 阶段可以直接通过 `etcdctl` 或 Admin API 写入；Dashboard 为可选扩展。
+
 ---
 
-## 三、核心类型系统
+
 
 ### 设计原则
 
-**热路径用枚举静态分发（零开销），扩展点用 HTTP callback（无 trait object 开销）。**
+**可读性优先**：Provider 数量有限且固定（MVP 为 6 个），用 `Arc<dyn ProviderCodec>` 持有和调用，代码简洁易懂。AI 请求延迟以秒计，网关自身的 dyn dispatch 开销可忽略不计。
 
-不做 `dyn Trait` 动态分发作为默认行为——这是 AISIX 与 litellm 的根本区别。
+扩展点（guardrail、callback）用外部 HTTP callback，无需动态插件系统。
 
 ### 核心类型
 
@@ -225,37 +240,56 @@ pub enum ProviderOutput {
 }
 ```
 
-### 内置 Provider 枚举分发
+### Provider 分发
+
+所有 Provider 统一用 `Arc<dyn ProviderCodec>` 持有，运行时通过 trait 方法调用：
 
 ```rust
-/// 核心 Provider 用枚举静态分发（零开销）
-/// 第三方 Provider 用 Dynamic 变体（唯一需要 dyn 的地方）
-pub enum BuiltinProvider {
-    OpenAI(OpenAIProvider),
-    Anthropic(AnthropicProvider),
-    AzureOpenAI(AzureOpenAIProvider),
-    Vertex(VertexProvider),
-    Bedrock(BedrockProvider),
-    Ollama(OllamaProvider),
-    Dynamic(Arc<dyn ProviderCodec>),  // 第三方扩展点
+/// CompiledSnapshot 中的 Provider 注册表
+pub struct ProviderRegistry {
+    /// provider_id → codec 实例
+    pub codecs: HashMap<String, Arc<dyn ProviderCodec>>,
 }
 
-impl BuiltinProvider {
-    pub async fn execute(
+/// 使用示例：路由选定 target 后，直接拿 codec 执行
+let codec = registry.codecs.get(&target.provider_id)?;
+let output = codec.execute(ctx, &target, &upstream_client).await?;
+```
+
+`OpenAICompatCodec` 是一个通用实现，覆盖所有 OpenAI 兼容 Provider（OpenAI、Azure OpenAI、Ollama、vLLM、Groq 等），只需在注册时传入不同的 base URL 和 auth 策略即可复用。非兼容 Provider（Anthropic、Vertex AI、Bedrock）各自独立实现 `ProviderCodec`。
+
+非兼容 Provider 实现示例（以 Anthropic 为例）：
+
+```rust
+pub struct AnthropicCodec {
+    api_key: String,
+}
+
+#[async_trait]
+impl ProviderCodec for AnthropicCodec {
+    fn kind(&self) -> ProviderKind { ProviderKind::Anthropic }
+    fn capabilities(&self) -> ProviderCapabilities { /* chat, streaming, vision, ... */ }
+
+    fn build_request(
         &self,
         ctx: &RequestContext,
         target: &ResolvedTarget,
-        client: &UpstreamClient,
+    ) -> Result<http::Request<Body>, GatewayError> {
+        // CanonicalRequest → Anthropic Messages API 格式
+        // 注入 x-api-key 头
+    }
+
+    async fn parse_response(
+        &self,
+        ctx: &RequestContext,
+        target: &ResolvedTarget,
+        resp: http::Response<Incoming>,
     ) -> Result<ProviderOutput, GatewayError> {
-        match self {
-            Self::OpenAI(p) => client.execute_codec(p, ctx, target).await,
-            Self::Anthropic(p) => client.execute_codec(p, ctx, target).await,
-            Self::AzureOpenAI(p) => client.execute_codec(p, ctx, target).await,
-            Self::Vertex(p) => client.execute_codec(p, ctx, target).await,
-            Self::Bedrock(p) => client.execute_codec(p, ctx, target).await,
-            Self::Ollama(p) => client.execute_codec(p, ctx, target).await,
-            Self::Dynamic(p) => client.execute_codec(p.as_ref(), ctx, target).await,
-        }
+        // Anthropic event:/data: SSE → StreamEvent → ProviderOutput::Stream
+    }
+
+    fn normalize_error(&self, status: StatusCode, body: &[u8]) -> GatewayError {
+        // Anthropic 错误码 → GatewayError 统一分类
     }
 }
 ```
@@ -384,8 +418,8 @@ Client Request
   │                                                              │
   └── 流式分支 ──────────────────────────────────────────────────┐
        ▼                                                        │
-     [Stream Transcoder] ─── 上游 SSE 格式 → OpenAI SSE          │
-       ▼                   (上游已兼容则零拷贝直通)                 │
+      [Stream Transcoder] ─── 上游 SSE 格式 → StreamEvent → OpenAI SSE │
+        ▼                   (统一解析，不区分兼容/非兼容上游)              │
      [During-Stream Guardrails] ─── 仅超时可控的 HTTP callback     │
        ▼                                                        │
      [增量 Usage 统计] ─── 累计 token 计数                         │
@@ -483,9 +517,10 @@ Client Request
 - 增量更新 token/usage
 - 流结束时异步结算
 
-**核心原则：零拷贝直通**
-- 如果上游本身就是 OpenAI 兼容 SSE 且无 guardrail 需要修改 chunk → 直接隧道转发 `Bytes`
-- 否则 → 运行一次性转码器
+**核心原则：统一解析转发**
+- 所有上游响应（无论 OpenAI 兼容格式还是 Anthropic/Gemini 格式）统一解析为内部 `StreamEvent`
+- 再渲染为 OpenAI SSE 输出给客户端
+- 这使 token 计数、guardrail、日志等后处理逻辑统一，无需维护"直通"和"转码"两条代码路径
 
 ---
 
@@ -533,32 +568,32 @@ where
 
 **流式代理（阶段 12）**——这是整个 Gateway 最复杂的地方，有三个独立难点：
 
-**难点 A：零拷贝直通（OpenAI 兼容上游）**
+**难点 A：流式帧边界处理**
 
-上游本身就返回 OpenAI 格式的 SSE，理想情况是把 upstream 的 response body 直接管道给客户端，不解析每一帧：
+SSE 帧边界不一定与 TCP 包边界对齐。一个 SSE 事件可能跨多个 TCP 包到达，也可能一个 TCP 包包含多个 SSE 事件。解析器需要维护跨帧状态机：
 
 ```
-客户端 ←── AISIX ←── 上游(OpenAI 格式)
-               ↑
-        理想：字节流直通，不反序列化
-        现实：需要同时做 token 计数（用于计费/限流），必须至少解析 usage 字段
+TCP 包到达 → 追加到缓冲区 → 查找完整帧分隔符（\n\n）
+  → 提取完整帧 → 解析为 StreamEvent → 渲染为 OpenAI SSE
+  → 剩余字节留在缓冲区等待下一个包
 ```
 
-挑战：hyper 的 body 是 `Stream<Item=Result<Bytes>>`，零拷贝转发本身不难，但一旦需要"边转发边计数"，就必须在流上插入一个 transform，稍有不慎会引入额外内存拷贝或影响背压（backpressure）传递。
+挑战：状态机必须是零 panic——流式响应一旦开始发送，panic 会让客户端收到截断的响应。同时需要处理各 Provider 的格式差异（OpenAI SSE、Anthropic event/data、Gemini JSON lines、Bedrock 二进制 eventstream）。
 
-**难点 B：格式转码（非 OpenAI 兼容上游）**
+**难点 B：多 Provider 格式转码**
 
-例如 Anthropic、Gemini 的流格式与 OpenAI SSE 不同，需要实时转码：
+各 Provider 流格式各异，需要分别实现解析器并统一输出为 `StreamEvent`：
 
 ```
 上游 Anthropic SSE 帧
   data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}
-         ↓ 转码
-客户端 OpenAI SSE 帧
+         ↓ 解析为 StreamEvent
+StreamEvent::Delta("Hello")
+         ↓ 渲染为 OpenAI SSE
   data: {"id":"...","choices":[{"delta":{"content":"Hello"}}]}
 ```
 
-挑战：SSE 帧边界不一定与 TCP 包边界对齐，需要跨帧拼接状态机。同时转码逻辑必须是零 panic（流式响应已经开始发送，panic 会让客户端收到截断的响应）。
+挑战：Bedrock 使用 `application/vnd.amazon.eventstream` 二进制帧格式（非 SSE），需要独立的二进制解析器；Vertex AI 使用 JSON lines。每种格式的帧结束信号和 usage 字段位置不同，需要全部统一到 `StreamEvent::Usage`。
 
 **难点 C：首字节前 fallback**
 
@@ -785,7 +820,7 @@ Phase 0（基础验证）
 
 Phase 1（流式核心）
   └── 攻克 StreamChunk 的三个难点
-      顺序：零拷贝直通 → 格式转码 → 首字节前 fallback
+       顺序：流式帧边界处理 → 多 Provider 格式转码 → 首字节前 fallback
       这是项目技术门槛最高的部分，应该在早期就用真实 provider 测试
 
 Phase 2（完整功能）
@@ -901,13 +936,12 @@ Global Proxy Budget
 │  (aisix-types)                     │  CanonicalRequest / CanonicalResponse
 ├────────────────────────────────────┤
 │  Provider Codec Layer              │  每个 Provider 一个编解码器
-│  (aisix-providers)                 │  - OpenAICodec
+│  (aisix-providers)                 │  - OpenAICompatCodec（通用）
+│                                    │    ↳ 复用于 OpenAI / Azure OpenAI /
+│                                    │      Ollama / vLLM / Groq 等兼容 Provider
 │                                    │  - AnthropicCodec
-│                                    │  - AzureCodec
-│                                    │  - VertexCodec
-│                                    │  - BedrockCodec
-│                                    │  - OllamaCodec
-│                                    │  - ... (100+)
+│                                    │  - VertexCodec（含 Google OAuth 2.0）
+│                                    │  - BedrockCodec（含二进制 eventstream）
 ├────────────────────────────────────┤
 │  Shared Transport Layer            │  统一上游 HTTP 客户端
 │  (hyper client pool)               │  - 连接池（按 scheme+host+port）
@@ -916,6 +950,23 @@ Global Proxy Budget
 │                                    │  - per-origin 超时配置
 └────────────────────────────────────┘
 ```
+
+### OpenAICompatCodec
+
+大多数 Provider 使用与 OpenAI 相同的 REST 接口格式。`OpenAICompatCodec` 是一个通用实现，注册 Provider 时只需传入不同的 base URL 和 auth 策略即可复用，无需为每个兼容 Provider 单独写 codec：
+
+```rust
+// 注册示例
+registry.register("openai-us",     OpenAICompatCodec::new("https://api.openai.com",      BearerAuth(openai_key)));
+registry.register("azure-eastus",  OpenAICompatCodec::new("https://myazure.openai.azure.com", AzureApiKeyAuth(azure_key)));
+registry.register("ollama-local",  OpenAICompatCodec::new("http://localhost:11434",       NoAuth));
+registry.register("groq",          OpenAICompatCodec::new("https://api.groq.com/openai", BearerAuth(groq_key)));
+```
+
+非兼容 Provider 各自独立实现 `ProviderCodec`：
+- **AnthropicCodec**：`x-api-key` 头，Anthropic 专有消息格式，`event:` + `data:` 双行 SSE
+- **VertexCodec**：Google OAuth 2.0 service account JWT，Gemini JSON lines 流格式
+- **BedrockCodec**：AWS SigV4 签名，`application/vnd.amazon.eventstream` 二进制帧（工作量最大）
 
 ### Provider 能力声明
 
@@ -1339,7 +1390,6 @@ aisixd → aisix-server
 | PostgreSQL | `sqlx` | 编译时 SQL 检查, 异步 |
 | Redis | `redis` | 异步 + Lua 脚本 |
 | JWT | `jsonwebtoken` | JWT 认证 |
-| Key 哈希 | `argon2` | Virtual Key 安全存储 |
 | 限流 | `governor` | Token Bucket / Leaky Bucket |
 | 指标 | `prometheus` | Prometheus exporter |
 | 追踪 | `tracing` + `opentelemetry` | 结构化日志 + OTEL |
