@@ -39,14 +39,14 @@
 
 ```
       ┌──────────────────────────────────────────────┐
-      │               Control Plane                   │
-      │      CLI / Admin API / Dashboard              │
+      │               Control Plane                  │
+      │      CLI / Admin API / Dashboard             │
       └─────────────────────┬────────────────────────┘
                             │
-                 ┌──────────┴──────────┐
-                  │      etcd Cluster           │
-                  │    (source of truth)        │
-                 └──────────┬──────────┘
+                 ┌──────────┴──────────────┐
+                 │      etcd Cluster       │
+                 │    (source of truth)    │
+                 └──────────┬──────────────┘
                             │ etcd watch
          ┌──────────────────┼──────────────────┐
          │                  │                  │
@@ -66,31 +66,31 @@
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                    AISIX Data Plane Node                  │
+│                    AISIX Data Plane Node                 │
 │                                                          │
-│  ┌────────────────┐   ┌──────────────────────────────┐  │
-│  │ etcd Watcher   │──▶│ Arc<CompiledSnapshot>        │  │
-│  │ (config sync)  │   │ (immutable, ArcSwap atomic)  │  │
-│  └────────────────┘   └──────────────┬───────────────┘  │
+│  ┌────────────────┐   ┌──────────────────────────────┐   │
+│  │ etcd Watcher   │──▶│ Arc<CompiledSnapshot>        │   │
+│  │ (config sync)  │   │ (immutable, ArcSwap atomic)  │   │
+│  └────────────────┘   └──────────────┬───────────────┘   │
 │                                      │                   │
-│  ┌───────────────────────────────────▼────────────────┐ │
-│  │              Request Pipeline (axum/tower)          │ │
-│  │                                                     │ │
-│  │  Auth → Policy → Mutation → Guardrail → RateLimit  │ │
-│  │  → Cache → Router → Provider → Guardrail → Spend   │ │
-│  │  → Logging → Response                               │ │
-│  └──────────────────────────┬─────────────────────────┘ │
+│  ┌───────────────────────────────────▼────────────────┐  │
+│  │              Request Pipeline (axum/tower)         │  │
+│  │                                                    │  │
+│  │  Auth → Policy → Mutation → Guardrail → RateLimit  │  │
+│  │  → Cache → Router → Provider → Guardrail → Spend   │  │
+│  │  → Logging → Response                              │  │
+│  └──────────────────────────┬─────────────────────────┘  │
 │                             │                            │
-│  ┌──────────────────────────▼─────────────────────────┐ │
-│  │           Upstream Pool (hyper client)              │ │
-│  │  pool: scheme+host+port, HTTP/2, keepalive          │ │
-│  └────────────────────────────────────────────────────┘ │
+│  ┌──────────────────────────▼─────────────────────────┐  │
+│  │           Upstream Pool (hyper client)             │  │
+│  │  pool: scheme+host+port, HTTP/2, keepalive         │  │
+│  └────────────────────────────────────────────────────┘  │
 │                                                          │
-│  ┌─────────────────┐  ┌──────────────────────────────┐ │
-│  │ Redis Client    │  │ Background Tasks              │ │
-│  │ (rate/cache/cc) │  │ - emit UsageEvent (structlog) │ │
-│  └─────────────────┘  │ - health chk / metrics        │ │
-│                        └──────────────────────────────┘ │
+│  ┌─────────────────┐  ┌───────────────────────────────┐  │
+│  │ Redis Client    │  │ Background Tasks              │  │
+│  │ (rate/cache/cc) │  │ - emit UsageEvent (structlog) │  │
+│  └─────────────────┘  │ - health chk / metrics        │  │
+│                        └──────────────────────────────┘  │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -362,16 +362,16 @@ Client Request
   │
   ▼
 [5. Authorization] ─── resolve Key→Team→Member→Customer hierarchy, determine effective policy
-  │               ─── allowed models, labels, params, limits
+  │                ─── allowed models, labels, params, limits
   │
   ▼
 [6. Request Mutation] ─── apply prompt template
-  │                  ─── drop params / modify params
-  │                  ─── enforce user param / size check
+  │                   ─── drop params / modify params
+  │                   ─── enforce user param / size check
   │
   ▼
 [7. Pre-Call Guardrails] ─── concurrent HTTP callbacks (PII masking, content safety)
-  │                     ─── can block / transform / annotate request
+  │                      ─── can block / transform / annotate request
   │
   ▼
 [8. Rate Limit + Budget Precheck]
@@ -386,19 +386,19 @@ Client Request
   │
   ▼ miss
 [10. Routing] ─── look up ModelConfig by model name → determine provider
-  │          ─── generate fallback plan (backup model list)
-  │          ─── exclude cooled-down providers
+  │           ─── generate fallback plan (backup model list)
+  │           ─── exclude cooled-down providers
   │
   ▼
 [11. Provider Request Build] ─── codec builds upstream HTTP request
   │
   ▼
 [12. Upstream Call] ─── timeout control
-  │                ─── retryable / fallback before first byte
+  │                 ─── retryable / fallback before first byte
   │
   ├── non-streaming branch ──────────────────────────────────────────┐
   │    ▼                                                             │
-  │  [parse full response]                                            │
+  │  [parse full response]                                           │
   │    ▼                                                             │
   │  [Post-Call Guardrails] ─── HTTP callback                        │
   │    ▼                                                             │
@@ -409,18 +409,18 @@ Client Request
   │  [async Spend/Logging] ─── emit UsageEvent to structlog + cb sink│
   │    ▼                                                             │
   │  [return JSON response]                                          │
-  │                                                                   │
+  │                                                                  │
   └── streaming branch ──────────────────────────────────────────────┐
        ▼                                                             │
       [Stream Transcoder] ─── upstream SSE → StreamEvent → OpenAI SSE│
-        ▼                   (unified parsing, all upstream formats)   │
-     [During-Stream Guardrails] ─── timeout-only HTTP callback       │
+       ▼                    (unified parsing, all upstream formats)  │
+      [During-Stream Guardrails] ─── timeout-only HTTP callback      │
        ▼                                                             │
-     [incremental Usage tracking] ─── accumulate token counts       │
+      [incremental Usage tracking] ─── accumulate token counts       │
        ▼                                                             │
-     [client SSE stream]                                             │
+      [client SSE stream]                                            │
        ▼                                                             │
-     [stream end → async settle/log]                                 │
+      [stream end → async settle/log]                                │
 ```
 
 ---
@@ -431,21 +431,21 @@ Client Request
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
-│                    Tower Middleware Stack                      │
+│                    Tower Middleware Stack                     │
 │  (global scope; any layer may return a response directly)     │
-│                                                                │
-│  ┌─────────────────────────────────────────────────────┐     │
-│  │  RequestBodyLimitLayer ← tower-http, max body size   │     │
-│  ├─────────────────────────────────────────────────────┤     │
-│  │  TraceLayer            ← tower-http, auto span/log   │     │
-│  └─────────────────────────────────────────────────────┘     │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────┐      │
+│  │  RequestBodyLimitLayer ← tower-http, max body size  │      │
+│  ├─────────────────────────────────────────────────────┤      │
+│  │  TraceLayer            ← tower-http, auto span/log  │      │
+│  └─────────────────────────────────────────────────────┘      │
 └───────────────────────────────────────────────────────────────┘
                               │
                               ▼ enters after route match
 ┌───────────────────────────────────────────────────────────────┐
 │                     axum Handler layer                        │
 │  (sequential execution, shared State, early return via `?`)   │
-│                                                                │
+│                                                               │
 │  1. Decode          deserialize body + extract Extractor      │
 │  2. Authentication  validate API Key → resolve tenant/key meta│
 │  3. Authorization   check if key may access model/operation   │
