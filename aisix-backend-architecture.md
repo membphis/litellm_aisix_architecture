@@ -31,38 +31,35 @@
 ### 配置同步
 
 ```
-  Control Plane ──▶ etcd 集群 ──────────────▶ AISIX Data Plane
+  Control Plane ──▶ etcd Cluster ─────────────▶ AISIX Data Plane
                                                (etcd watch)
 ```
 
 ### 整体架构
 
 ```
-      ┌──────────────────────────────────────────┐
-      │            Control Plane                  │
-      │  CLI / Admin API / Dashboard              │
-      └─────────────────┬────────────────────────┘
-                        │
-              ┌─────────▼─────────┐
-              │    etcd 集群        │
-              │  (配置真相源)        │
-              └─────────┬──────────┘
-                        │
-                        │ etcd watch
-                        │
-      ┌─────────────────┼─────────────────┐
-      │                 │                   │
-      ▼                 ▼                   ▼
-  ┌─────────┐     ┌─────────┐        ┌─────────┐
-  │ Node A  │     │ Node B  │        │ Node C  │
-  │ aisix-gateway  │     │ aisix-gateway  │        │ aisix-gateway  │
-  │         │     │         │        │         │
-  │ etcd    │     │ etcd    │        │ etcd    │
-  │ watcher │     │ watcher │        │ watcher │
-  │    ↓    │     │    ↓    │        │    ↓    │
-  │ Compiled│     │ Compiled│        │ Compiled│
-  │Snapshot │     │Snapshot │        │Snapshot │
-  └─────────┘     └─────────┘        └─────────┘
+      ┌──────────────────────────────────────────────┐
+      │               Control Plane                   │
+      │      CLI / Admin API / Dashboard              │
+      └─────────────────────┬────────────────────────┘
+                            │
+                 ┌──────────┴──────────┐
+                  │      etcd Cluster           │
+                  │    (source of truth)        │
+                 └──────────┬──────────┘
+                            │ etcd watch
+         ┌──────────────────┼──────────────────┐
+         │                  │                  │
+         ▼                  ▼                  ▼
+ ┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+ │    Node A     │  │    Node B     │  │    Node C     │
+ │ aisix-gateway │  │ aisix-gateway │  │ aisix-gateway │
+ │               │  │               │  │               │
+ │ etcd watcher  │  │ etcd watcher  │  │ etcd watcher  │
+ │      ↓        │  │      ↓        │  │      ↓        │
+ │   Compiled    │  │   Compiled    │  │   Compiled    │
+ │   Snapshot    │  │   Snapshot    │  │   Snapshot    │
+ └───────────────┘  └───────────────┘  └───────────────┘
 ```
 
 ### 数据面节点内部结构
@@ -73,7 +70,7 @@
 │                                                          │
 │  ┌────────────────┐   ┌──────────────────────────────┐  │
 │  │ etcd Watcher   │──▶│ Arc<CompiledSnapshot>        │  │
-│  │ (config sync)  │   │ (不可变配置，ArcSwap 原子切换) │  │
+│  │ (config sync)  │   │ (immutable, ArcSwap atomic)  │  │
 │  └────────────────┘   └──────────────┬───────────────┘  │
 │                                      │                   │
 │  ┌───────────────────────────────────▼────────────────┐ │
@@ -86,12 +83,12 @@
 │                             │                            │
 │  ┌──────────────────────────▼─────────────────────────┐ │
 │  │           Upstream Pool (hyper client)              │ │
-│  │  连接池 (scheme+host+port) / HTTP2 / Keepalive      │ │
+│  │  pool: scheme+host+port, HTTP/2, keepalive          │ │
 │  └────────────────────────────────────────────────────┘ │
 │                                                          │
 │  ┌─────────────────┐  ┌──────────────────────────────┐ │
 │  │ Redis Client    │  │ Background Tasks              │ │
-│  │ (限流/缓存/并发) │  │ - emit UsageEvent (structlog) │ │
+│  │ (rate/cache/cc) │  │ - emit UsageEvent (structlog) │ │
 │  └─────────────────┘  │ - health chk / metrics        │ │
 │                        └──────────────────────────────┘ │
 └──────────────────────────────────────────────────────────┘
@@ -352,78 +349,78 @@ pub trait CacheBackend: Send + Sync + 'static {
 Client Request
   │
   ▼
-[1. Route Match] ─── axum 路由匹配 /v1/chat/completions, /v1/embeddings, ...
+[1. Route Match] ─── axum route matching: /v1/chat/completions, /v1/embeddings, ...
   │
   ▼
-[2. Decode + Normalize] ─── 反序列化为 CanonicalRequest（统一内部类型）
+[2. Decode + Normalize] ─── deserialize into CanonicalRequest (unified internal type)
   │
   ▼
-[3. RequestContext 创建] ─── request_id + trace span + RequestContext 对象
+[3. RequestContext Init] ─── request_id + trace span + RequestContext object
   │
   ▼
 [4. Authentication] ─── Virtual Key / JWT / IP Filter
   │
   ▼
-[5. Authorization] ─── 解析 Key→Team→Member→Customer 层级，确定有效策略
-  │                  ─── 允许的模型、标签、参数、限额
+[5. Authorization] ─── resolve Key→Team→Member→Customer hierarchy, determine effective policy
+  │               ─── allowed models, labels, params, limits
   │
   ▼
-[6. Request Mutation] ─── prompt template 应用
-  │                    ─── drop params / modify params
-  │                    ─── enforce user param / size check
+[6. Request Mutation] ─── apply prompt template
+  │                  ─── drop params / modify params
+  │                  ─── enforce user param / size check
   │
   ▼
-[7. Pre-Call Guardrails] ─── 并发 HTTP callback（PII 脱敏、内容安全）
-  │                        ─── 可阻塞/转换/注解请求
+[7. Pre-Call Guardrails] ─── concurrent HTTP callbacks (PII masking, content safety)
+  │                     ─── can block / transform / annotate request
   │
   ▼
 [8. Rate Limit + Budget Precheck]
-  │   ─── 本地影子限流器（快速拒绝明显超限）
-  │   ─── Redis 权威限流器（RPM/TPM/并发/预算）
-  │   ─── TPM: 预估 input + max_output token，预留额度
+  │   ─── local shadow rate limiter (fast-reject obvious overages)
+  │   ─── Redis authoritative rate limiter (RPM/TPM/concurrency/budget)
+  │   ─── TPM: estimate input + max_output tokens, reserve quota
   │
   ▼
-[9. Cache Lookup] ─── 内存/Redis 缓存命中？
+[9. Cache Lookup] ─── memory/Redis cache hit?
   │
-  ├── hit ──▶ [响应归一化] ──▶ [返回缓存响应]
+  ├── hit ──▶ [normalize response] ──▶ [return cached response]
   │
   ▼ miss
-[10. Routing] ─── 按 model name 查 ModelConfig → 确定 provider
-  │            ─── fallback 计划生成（备用 model 列表）
-  │            ─── 冷却排除
+[10. Routing] ─── look up ModelConfig by model name → determine provider
+  │          ─── generate fallback plan (backup model list)
+  │          ─── exclude cooled-down providers
   │
   ▼
-[11. Provider Request Build] ─── 编解码器构建上游 HTTP 请求
+[11. Provider Request Build] ─── codec builds upstream HTTP request
   │
   ▼
-[12. Upstream Call] ─── 超时控制
-  │                  ─── 首字节前可重试/降级
+[12. Upstream Call] ─── timeout control
+  │                ─── retryable / fallback before first byte
   │
-  ├── 非流式分支 ──────────────────────────────────────────────┐
-  │    ▼                                                        │
-  │  [完整响应解析]                                               │
-  │    ▼                                                        │
-  │  [Post-Call Guardrails] ─── HTTP callback                    │
-  │    ▼                                                        │
-  │  [Usage/Cost 提取]                                           │
-  │    ▼                                                        │
-  │  [缓存写入（可选）]                                           │
-  │    ▼                                                        │
-  │  [异步 Spend/Logging] ─── emit UsageEvent 到结构化日志 + callback sink        │
-  │    ▼                                                        │
-  │  [返回 JSON 响应]                                            │
-  │                                                              │
-  └── 流式分支 ──────────────────────────────────────────────────┐
-       ▼                                                        │
-      [Stream Transcoder] ─── 上游 SSE 格式 → StreamEvent → OpenAI SSE │
-        ▼                   (统一解析，不区分兼容/非兼容上游)              │
-     [During-Stream Guardrails] ─── 仅超时可控的 HTTP callback     │
-       ▼                                                        │
-     [增量 Usage 统计] ─── 累计 token 计数                         │
-       ▼                                                        │
-     [客户端 SSE 流]                                              │
-       ▼                                                        │
-     [流结束 → 异步结算/日志]                                      │
+  ├── non-streaming branch ──────────────────────────────────────────┐
+  │    ▼                                                             │
+  │  [parse full response]                                            │
+  │    ▼                                                             │
+  │  [Post-Call Guardrails] ─── HTTP callback                        │
+  │    ▼                                                             │
+  │  [extract Usage/Cost]                                            │
+  │    ▼                                                             │
+  │  [cache write (optional)]                                        │
+  │    ▼                                                             │
+  │  [async Spend/Logging] ─── emit UsageEvent to structlog + cb sink│
+  │    ▼                                                             │
+  │  [return JSON response]                                          │
+  │                                                                   │
+  └── streaming branch ──────────────────────────────────────────────┐
+       ▼                                                             │
+      [Stream Transcoder] ─── upstream SSE → StreamEvent → OpenAI SSE│
+        ▼                   (unified parsing, all upstream formats)   │
+     [During-Stream Guardrails] ─── timeout-only HTTP callback       │
+       ▼                                                             │
+     [incremental Usage tracking] ─── accumulate token counts       │
+       ▼                                                             │
+     [client SSE stream]                                             │
+       ▼                                                             │
+     [stream end → async settle/log]                                 │
 ```
 
 ---
@@ -433,35 +430,35 @@ Client Request
 请求进入 AISIX 后，经过两个不同性质的代码层：
 
 ```
-┌──────────────────────────────────────────────────────────────┐
+┌───────────────────────────────────────────────────────────────┐
 │                    Tower Middleware Stack                      │
-│  （全局生效，任意一层可直接返回响应，无需进入 Handler）              │
+│  (global scope; any layer may return a response directly)     │
 │                                                                │
 │  ┌─────────────────────────────────────────────────────┐     │
-│  │  RequestBodyLimitLayer ← tower-http，限制最大请求体积  │     │
+│  │  RequestBodyLimitLayer ← tower-http, max body size   │     │
 │  ├─────────────────────────────────────────────────────┤     │
-│  │  TraceLayer            ← tower-http，自动 span/log   │     │
+│  │  TraceLayer            ← tower-http, auto span/log   │     │
 │  └─────────────────────────────────────────────────────┘     │
-└──────────────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────┘
                               │
-                              ▼ 路由匹配后进入
-┌──────────────────────────────────────────────────────────────┐
-│                     axum Handler 层                           │
-│  （顺序执行，共享 State，可 early return，但不能"插队"到路由前）    │
+                              ▼ enters after route match
+┌───────────────────────────────────────────────────────────────┐
+│                     axum Handler layer                        │
+│  (sequential execution, shared State, early return via `?`)   │
 │                                                                │
-│  1. Decode          反序列化请求体 + 提取 Extractor            │
-│  2. Authentication  验证 API Key → 解析 tenant/key 元数据      │
-│  3. Authorization   检查该 key 是否有权访问请求的 model/操作      │
-│  4. PreCall Guard   调用外部 guardrail HTTP 服务（可选）         │
-│  5. RateLimit       Redis 原子操作扣减 token bucket              │
-│  6. CacheLookup     查 Redis 语义缓存（可选，命中则短路）          │
-│  7. RouteSelect     选上游 + 负载均衡 + fallback 顺序           │
-│  8. PreUpstream     注入系统 prompt + 变量替换 + 参数覆盖        │
-│  9. UpstreamHeaders 拼装上游鉴权头、Host 头                     │
-│  10. StreamChunk    发送请求 + 流式转码 + 按块转发               │
-│  11. PostCall       记账 / 用量更新 / 缓存写入 / 回调 webhook    │
-│  12. OnError        错误分类 → fallback 重试 or 标准错误响应     │
-└──────────────────────────────────────────────────────────────┘
+│  1. Decode          deserialize body + extract Extractor      │
+│  2. Authentication  validate API Key → resolve tenant/key meta│
+│  3. Authorization   check if key may access model/operation   │
+│  4. PreCall Guard   call external guardrail HTTP service (opt)│
+│  5. RateLimit       Redis atomic op, decrement token bucket   │
+│  6. CacheLookup     semantic cache check, short-circuit on hit│
+│  7. RouteSelect     pick upstream + load-balance + fallback   │
+│  8. PreUpstream     inject prompt + replace vars + override   │
+│  9. UpstreamHeaders assemble upstream auth headers, Host      │
+│  10. StreamChunk    send request + transcode stream + forward │
+│  11. PostCall       billing/usage update, cache write, webhook│
+│  12. OnError        classify error → error response + fallback│
+└───────────────────────────────────────────────────────────────┘
 ```
 
 **关键区别**：
@@ -570,9 +567,9 @@ where
 SSE 帧边界不一定与 TCP 包边界对齐。一个 SSE 事件可能跨多个 TCP 包到达，也可能一个 TCP 包包含多个 SSE 事件。解析器需要维护跨帧状态机：
 
 ```
-TCP 包到达 → 追加到缓冲区 → 查找完整帧分隔符（\n\n）
-  → 提取完整帧 → 解析为 StreamEvent → 渲染为 OpenAI SSE
-  → 剩余字节留在缓冲区等待下一个包
+TCP packet arrives → append to buffer → find complete frame delimiter (\n\n)
+  → extract complete frame → parse into StreamEvent → render as OpenAI SSE
+  → leave remaining bytes in buffer, wait for next packet
 ```
 
 挑战：状态机必须是零 panic——流式响应一旦开始发送，panic 会让客户端收到截断的响应。同时需要处理各 Provider 的格式差异（OpenAI SSE、Anthropic event/data、Gemini JSON lines、Bedrock 二进制 eventstream）。
@@ -582,11 +579,11 @@ TCP 包到达 → 追加到缓冲区 → 查找完整帧分隔符（\n\n）
 各 Provider 流格式各异，需要分别实现解析器并统一输出为 `StreamEvent`：
 
 ```
-上游 Anthropic SSE 帧
+upstream Anthropic SSE frame
   data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}
-         ↓ 解析为 StreamEvent
+         ↓ parse into StreamEvent
 StreamEvent::Delta("Hello")
-         ↓ 渲染为 OpenAI SSE
+         ↓ render as OpenAI SSE
   data: {"id":"...","choices":[{"delta":{"content":"Hello"}}]}
 ```
 
@@ -597,13 +594,13 @@ StreamEvent::Delta("Hello")
 在收到上游第一个响应字节之前，如果发生错误（连接超时、上游 5xx），可以透明切换到备用 provider。但一旦第一个字节已经发给客户端，就无法再 fallback（HTTP 响应头已发出，状态码已定）：
 
 ```
-发起请求 ──▶ 上游 A
+send request ──▶ upstream A
                │
-               ├── 成功：开始流式转发 ──▶ 客户端（之后不能 fallback）
+               ├── success: start streaming to client ──▶ (no fallback after this point)
                │
-               └── 失败（首字节前）：
+               └── failure (before first byte):
                      ↓
-                   切换上游 B，重新发起请求 ──▶ 客户端
+                   switch to upstream B, retry request ──▶ client
 ```
 
 挑战：需要精确区分"响应头/首字节已发"和"尚未发出任何字节"两个状态，并在 fallback 时重置内部状态（重新执行 RouteSelect）。这个状态判断在 async 流式代码中容易出 race condition。
@@ -736,8 +733,8 @@ async fn chat_completions(
 
 ```
 src/pipeline/
-├── mod.rs              // PipelineStage trait、Flow、build_pipeline
-├── context.rs          // RequestContext 定义
+├── mod.rs              // PipelineStage trait, Flow, build_pipeline
+├── context.rs          // RequestContext definition
 ├── authorization.rs    // AuthorizationStage
 ├── guardrail.rs        // GuardrailStage
 ├── rate_limit.rs       // RateLimitStage
@@ -784,18 +781,18 @@ async fn chat_completions(
 **热加载流程**：
 
 ```
-etcd watch 触发
+etcd watch triggered
       │
       ▼
-后台任务（tokio::spawn）
-  重新编译配置 → Arc<CompiledSnapshot>
+background task (tokio::spawn)
+  recompile config → Arc<CompiledSnapshot>
       │
       ▼
-state.snapshot.store(new_snapshot)  ← 原子替换，耗时 < 1μs
+state.snapshot.store(new_snapshot)  ← atomic swap, < 1μs
       │
       ▼
-新请求自动用新快照
-进行中请求继续用旧快照直到完成（Arc 引用计数保护）
+new requests use new snapshot automatically
+in-flight requests keep old snapshot until done (Arc refcount)
 ```
 
 **为什么不用 `RwLock<CompiledSnapshot>`**：
@@ -810,19 +807,19 @@ state.snapshot.store(new_snapshot)  ← 原子替换，耗时 < 1μs
 基于上述分析，建议按以下顺序攻克技术风险：
 
 ```
-Phase 0（基础验证）
-  └── 先跑通一个非流式的 chat completion 请求
-      验证：Authentication → RateLimit → RouteSelect → 同步 HTTP 代理 → PostCall
-      这部分全是 🔧 级别，没有 ⚠️，适合最先建立信心
+Phase 0 (baseline validation)
+  └── run a non-streaming chat completion end-to-end
+      validate: Authentication → RateLimit → RouteSelect → sync HTTP proxy → PostCall
+      all 🔧 level, no ⚠️, good for building confidence first
 
-Phase 1（流式核心）
-  └── 攻克 StreamChunk 的三个难点
-       顺序：流式帧边界处理 → 多 Provider 格式转码 → 首字节前 fallback
-      这是项目技术门槛最高的部分，应该在早期就用真实 provider 测试
+Phase 1 (streaming core)
+  └── tackle the three StreamChunk hard points
+       order: frame boundary parsing → multi-provider transcoding → pre-first-byte fallback
+      highest technical difficulty; test against real providers early
 
-Phase 2（完整功能）
-  └── 逐步接入：Guardrail → 语义缓存 → 完整 Policy 规则
-      这些都是 🔧 级别，核心路径通了之后按需添加
+Phase 2 (full features)
+  └── incrementally add: Guardrail → semantic cache → full Policy rules
+      all 🔧 level, add as needed once the core path is proven
 ```
 
 ---
@@ -841,22 +838,22 @@ Phase 2（完整功能）
 ### 限流器两层模型
 
 ```
-请求进入
+request arrives
   │
   ▼
-[本地影子限流器] ─── 内存 EWMA 计数，极低成本
-  │                    明显超限 → 直接拒绝（保护 Redis）
+[local shadow rate limiter] ─── in-memory EWMA counter, ultra-low cost
+  │                                obvious overages → reject (protect Redis)
   │
-  ▼ 通过
-[Redis 权威限流器] ─── Lua 脚本原子检查 + 预留
+  ▼ pass
+[Redis authoritative rate limiter] ─── Lua atomic check + reserve
   │
-  ├── 拒绝 → 返回 429
+  ├── reject → return 429
   │
-  ▼ 通过
-[执行请求]
+  ▼ pass
+[execute request]
   │
   ▼
-[异步结算] ─── 实际 usage 增量更新 Redis + emit UsageEvent 到结构化日志
+[async settle] ─── actual usage delta update Redis + emit UsageEvent to structlog
 ```
 
 ### 限流维度
@@ -871,24 +868,24 @@ Phase 2（完整功能）
 ### TPM 处理流程
 
 ```
-请求开始:
-  预估 input_tokens + max_output_tokens
-  预留额度到 Redis
+request start:
+  estimate input_tokens + max_output_tokens
+  reserve quota in Redis
 
-请求完成:
-  计算实际 usage
-  结算差值到 Redis（多退少补）
+request complete:
+  compute actual usage
+  settle delta in Redis (refund over-reservation, charge under-estimation)
 ```
 
 ### 并发租约（Redis Sorted Set）
 
 ```
-请求开始:
+request start:
   ZADD rl:cc:{scope}:{id} {expires_at} {request_id}
-  ZREMRANGEBYSCORE rl:cc:{scope}:{id} 0 {now}   ← 清理过期
-  ZCARD rl:cc:{scope}:{id} > limit → 拒绝
+  ZREMRANGEBYSCORE rl:cc:{scope}:{id} 0 {now}   ← evict expired entries
+  ZCARD rl:cc:{scope}:{id} > limit → reject
 
-请求完成:
+request complete:
   ZREM rl:cc:{scope}:{id} {request_id}
 ```
 
@@ -897,15 +894,15 @@ Phase 2（完整功能）
 **关键：请求线程永不阻塞在日志写入上。**
 
 ```
-请求路径
-  → 创建 UsageEvent
-  → 发送到 bounded mpsc channel
-  → 立即返回响应给客户端
+request path
+  → create UsageEvent
+  → send to bounded mpsc channel
+  → return response to client immediately
 
-后台批量处理器
-  ← 从 channel 消费
-  ├── 增量更新 Redis 实时花费计数器
-  └── 写结构化日志（JSON，每条一行）
+background batch processor
+  ← consume from channel
+  ├── increment Redis real-time spend counter
+  └── write structured log (JSON, one line per event)
 ```
 
 数据面输出的 UsageEvent 由外部 log agent（Vector/Fluentd 等）采集，
@@ -931,22 +928,22 @@ Global Proxy Budget
 
 ```
 ┌────────────────────────────────────┐
-│  Canonical API Layer               │  AISIX 统一请求/响应类型
+│  Canonical API Layer               │  unified request/response types
 │  (aisix-types)                     │  CanonicalRequest / CanonicalResponse
 ├────────────────────────────────────┤
-│  Provider Codec Layer              │  每个 Provider 一个编解码器
-│  (aisix-providers)                 │  - OpenAICompatCodec（通用）
-│                                    │    ↳ 复用于 OpenAI / Azure OpenAI /
-│                                    │      Ollama / vLLM / Groq 等兼容 Provider
+│  Provider Codec Layer              │  one codec per provider
+│  (aisix-providers)                 │  - OpenAICompatCodec (generic)
+│                                    │    ↳ reused for OpenAI / Azure OpenAI /
+│                                    │      Ollama / vLLM / Groq etc.
 │                                    │  - AnthropicCodec
-│                                    │  - VertexCodec（含 Google OAuth 2.0）
-│                                    │  - BedrockCodec（含二进制 eventstream）
+│                                    │  - VertexCodec (incl. Google OAuth 2.0)
+│                                    │  - BedrockCodec (incl. binary eventstream)
 ├────────────────────────────────────┤
-│  Shared Transport Layer            │  统一上游 HTTP 客户端
-│  (hyper client pool)               │  - 连接池（按 scheme+host+port）
-│                                    │  - HTTP/2 优先，HTTP/1.1 keepalive
-│                                    │  - DNS 缓存
-│                                    │  - per-origin 超时配置
+│  Shared Transport Layer            │  unified upstream HTTP client
+│  (hyper client pool)               │  - connection pool (by scheme+host+port)
+│                                    │  - HTTP/2 preferred, HTTP/1.1 keepalive
+│                                    │  - DNS cache
+│                                    │  - per-origin timeout config
 └────────────────────────────────────┘
 ```
 
@@ -991,28 +988,28 @@ pub struct ProviderCapabilities {
 
 ```
 CanonicalRequest
-  → 应用 model-specific prompt template
-  → drop/modify params（按策略）
-  → 映射 logical model → provider deployment
-  → ProviderCodec 构建 HTTP 请求
-  → 发送到上游
+  → apply model-specific prompt template
+  → drop/modify params (per policy)
+  → map logical model → provider deployment
+  → ProviderCodec builds HTTP request
+  → send to upstream
 ```
 
 ### 流式适配
 
 ```
-上游 Provider SSE 格式各异：
+upstream provider SSE formats vary:
   OpenAI    → data: {"choices":[{"delta":{"content":"Hi"}}]}
   Anthropic → event: content_block_delta / data: {"delta":{"text":"Hi"}}
   Gemini    → JSON lines with candidates
 
-         ↓ 统一转换为内部流 ↓
+         ↓ unified conversion to internal stream ↓
 
-StreamEvent::Delta(Bytes)      // 内容块
-StreamEvent::Usage(UsageDelta) // 增量 token
-StreamEvent::Done              // 结束
+StreamEvent::Delta(Bytes)      // content chunk
+StreamEvent::Usage(UsageDelta) // incremental tokens
+StreamEvent::Done              // end
 
-         ↓ 渲染为 OpenAI 兼容 SSE ↓
+         ↓ render as OpenAI-compatible SSE ↓
 
 data: {"choices":[{"delta":{"content":"Hi"}}]}
 ```
@@ -1167,42 +1164,42 @@ runtime:
 ### 配置编译流程
 
 ```
-aisix-gateway 启动
+aisix-gateway starts
   │
   ▼
-连接 etcd 集群
+connect to etcd cluster
   │
   ▼
-[1] GET /aisix/ prefix (range) → 拉取全量配置（响应中携带当前 revision N）
+[1] GET /aisix/ prefix (range) → fetch full config (response carries current revision N)
   │
   ▼
-[2] 解析密钥引用（env/KMS/Vault → 实际值）
+[2] resolve secret references (env/KMS/Vault → actual values)
   │
   ▼
-[3] 三层验证
-  │    ├── Schema 验证：必填字段、枚举值、类型正确性
-  │    ├── 语义验证：引用完整性、无环 fallback、限额合理
-  │    └── 运行时预检：URL 格式、auth 完整性、能力兼容
+[3] three-layer validation
+  │    ├── schema validation: required fields, enum values, type correctness
+  │    ├── semantic validation: referential integrity, no-cycle fallback, sane limits
+  │    └── runtime pre-check: URL format, auth completeness, capability compatibility
   │
   ▼
-[4] 编译为 CompiledSnapshot
-  │    ├── 构建路由索引（alias → group, wildcard matcher）
-  │    ├── 构建策略查找表（key → EffectivePolicy）
-  │    ├── 预编译正则/模板
-  │    ├── 构建 Provider 注册表
-  │    └── 构建 guardrail 链
+[4] compile into CompiledSnapshot
+  │    ├── build route index (alias → group, wildcard matcher)
+  │    ├── build policy lookup table (key → EffectivePolicy)
+  │    ├── pre-compile regex/templates
+  │    ├── build Provider registry
+  │    └── build guardrail chain
   │
   ▼
-[5] ArcSwap 原子切换 → 开始服务流量
+[5] ArcSwap atomic swap → start serving traffic
   │
   ▼
-[6] WATCH /aisix/ prefix (from revision N+1) → 持续监听变更
+[6] WATCH /aisix/ prefix (from revision N+1) → continuous change listening
   │
-  ├── 收到 PUT 事件
-  │    ├── 去抖（250-500ms 合并窗口）
-  │    ├── 合并变更到本地配置
-  │    ├── 重新验证 + 编译
-  │    └── ArcSwap 原子切换（验证失败则保留旧快照）
+  ├── on PUT event
+  │    ├── debounce (250-500ms merge window)
+  │    ├── merge changes into local config
+  │    ├── re-validate + recompile
+  │    └── ArcSwap atomic swap (keep old snapshot if validation fails)
 ```
 
 ### 热加载安全机制
@@ -1231,34 +1228,34 @@ apikeys[0].allowed_models[1]:
 
 ```
 aisix/
-├── Cargo.toml                    # workspace 根
+├── Cargo.toml                    # workspace root
 ├── bin/
-│   └── aisix-gateway/                   # 可执行入口
+│   └── aisix-gateway/                   # binary entry point
 │       └── main.rs
 └── crates/
     │
-    │  ── 基础层 ──
-    ├── aisix-types/              # 共享类型：CanonicalRequest/Response, Usage, IDs, Error
-    ├── aisix-core/               # 核心抽象：RequestContext, GatewayState, 管线编排
-    ├── aisix-config/             # etcd watch + 编译快照 + 验证 + 热加载
+    │  ── foundation ──
+    ├── aisix-types/              # shared types: CanonicalRequest/Response, Usage, IDs, Error
+    ├── aisix-core/               # core abstractions: RequestContext, GatewayState, pipeline orchestration
+    ├── aisix-config/             # etcd watch + compiled snapshot + validation + hot-reload
     │
-    │  ── 存储层 ──
-    ├── aisix-storage/            # Redis(计数器/缓存) + 密钥解析（PG 归控制面）
+    │  ── storage ──
+    ├── aisix-storage/            # Redis (counters/cache) + secret resolution (PG owned by control plane)
     │
-    │  ── 领域模块 ──
+    │  ── domain modules ──
     ├── aisix-auth/               # Virtual Key, JWT, IP Filter
-    ├── aisix-policy/             # 层级策略解析, 模型/标签访问控制, 参数变异
-    ├── aisix-router/             # model 解析, fallback, cooldown
-    ├── aisix-ratelimit/          # RPM/TPM/并发/预算检查, 本地影子 + Redis 权威
-    ├── aisix-cache/              # 内存/Redis/Disk/S3/语义缓存后端
-    ├── aisix-providers/          # Provider 编解码器, 请求/响应转换, 错误归一化
-    ├── aisix-guardrail/          # HTTP callback 引擎, pre/post-call guardrail
-    ├── aisix-spend/              # 定价, 费用计算, 异步批量记账, 预算对账
+    ├── aisix-policy/             # hierarchical policy resolution, model/label access control, param mutation
+    ├── aisix-router/             # model resolution, fallback, cooldown
+    ├── aisix-ratelimit/          # RPM/TPM/concurrency/budget checks, local shadow + Redis authoritative
+    ├── aisix-cache/              # memory/Redis/Disk/S3/semantic cache backends
+    ├── aisix-providers/          # provider codecs, request/response transcoding, error normalization
+    ├── aisix-guardrail/          # HTTP callback engine, pre/post-call guardrail
+    ├── aisix-spend/              # pricing, cost calculation, async batch billing, budget reconciliation
     ├── aisix-observability/      # tracing, Prometheus, OTEL, callback sink fanout
     │
-    │  ── 编排层 ──
-    ├── aisix-runtime/            # 运行时组合, 后台任务, 快照生命周期, 注册表
-    └── aisix-server/             # axum 路由, 请求提取, SSE 响应, health/metrics 端点
+    │  ── orchestration ──
+    ├── aisix-runtime/            # runtime composition, background tasks, snapshot lifecycle, registry
+    └── aisix-server/             # axum routing, request extraction, SSE response, health/metrics endpoints
 ```
 
 ### Crate 职责表
