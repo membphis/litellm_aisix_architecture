@@ -89,13 +89,11 @@
 │  │  连接池 (scheme+host+port) / HTTP2 / Keepalive      │ │
 │  └────────────────────────────────────────────────────┘ │
 │                                                          │
-│  ┌─────────────────┐  ┌─────────────┐  ┌─────────────┐ │
-│  │ Redis Client    │  │ PG Client   │  │ Background  │ │
-│  │ (限流/缓存/并发) │  │ (ledger)    │  │ Tasks       │ │
-│  └─────────────────┘  └─────────────┘  │ - spend flush│ │
-│                                         │ - health chk │ │
-│                                         │ - metrics    │ │
-│                                         └─────────────┘ │
+│  ┌─────────────────┐  ┌──────────────────────────────┐ │
+│  │ Redis Client    │  │ Background Tasks              │ │
+│  │ (限流/缓存/并发) │  │ - emit UsageEvent (structlog) │ │
+│  └─────────────────┘  │ - health chk / metrics        │ │
+│                        └──────────────────────────────┘ │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -115,7 +113,7 @@
 
 | 维度 | aisix-admin（控制面） | aisix-gateway（数据面） |
 |------|----------------------|-----------------|
-| **职责** | 写 etcd / PostgreSQL | 只读 etcd |
+| **职责** | 写 etcd / PostgreSQL；消费 UsageEvent 写入 PG | 只读 etcd；写结构化日志（UsageEvent） |
 | **API** | Admin REST API（CRUD 配置实体） | LLM Proxy API（/v1/...） |
 | **LLM 流量** | 不处理 | 全部处理 |
 | **通信** | 写入 etcd | Watch etcd 变更 |
@@ -411,7 +409,7 @@ Client Request
   │    ▼                                                        │
   │  [缓存写入（可选）]                                           │
   │    ▼                                                        │
-  │  [异步 Spend/Logging] ─── 批量写入 PG + callback sink        │
+  │  [异步 Spend/Logging] ─── emit UsageEvent 到结构化日志 + callback sink        │
   │    ▼                                                        │
   │  [返回 JSON 响应]                                            │
   │                                                              │
@@ -838,7 +836,7 @@ Phase 2（完整功能）
 | **L1 热路径** | 进程内 `Arc<CompiledSnapshot>` | 路由索引、策略表、模板、正则、Provider 注册表 | 无锁读，ArcSwap 原子切换 |
 | **L2 分布式计数** | Redis | RPM/TPM 计数器、并发租约、冷却标记、实时花费 | Lua 脚本原子操作 |
 | **L3 共享缓存** | Redis / S3 / GCS | 响应缓存（非流式）、语义缓存向量 | 异步读写 |
-| **L4 持久真相** | PostgreSQL | 使用量账本、审计日志、预算定义、定价表 | 异步批量写入 |
+| **L4 持久真相** | PostgreSQL | 使用量账本、审计日志、预算定义、定价表 | 控制面持有，数据面不直接访问；数据面通过结构化日志输出 UsageEvent，由外部 log agent 采集后写入 |
 
 ### 限流器两层模型
 
@@ -858,7 +856,7 @@ Phase 2（完整功能）
 [执行请求]
   │
   ▼
-[异步结算] ─── 实际 usage 增量更新 Redis + 批量写入 PG
+[异步结算] ─── 实际 usage 增量更新 Redis + emit UsageEvent 到结构化日志
 ```
 
 ### 限流维度
@@ -896,7 +894,7 @@ Phase 2（完整功能）
 
 ### Spend 追踪：异步管道
 
-**关键：请求线程永不阻塞在 PG 写入上。**
+**关键：请求线程永不阻塞在日志写入上。**
 
 ```
 请求路径
@@ -907,9 +905,11 @@ Phase 2（完整功能）
 后台批量处理器
   ← 从 channel 消费
   ├── 增量更新 Redis 实时花费计数器
-  ├── 批量 INSERT PostgreSQL usage_events 表
-  └── 批量 UPSERT 聚合汇总表
+  └── 写结构化日志（JSON，每条一行）
 ```
+
+数据面输出的 UsageEvent 由外部 log agent（Vector/Fluentd 等）采集，
+控制面负责写入 PostgreSQL usage_events 及聚合汇总表。
 
 ### 预算执行层级
 
@@ -1243,7 +1243,7 @@ aisix/
     ├── aisix-config/             # etcd watch + 编译快照 + 验证 + 热加载
     │
     │  ── 存储层 ──
-    ├── aisix-storage/            # PG(ledger/audit) + Redis(计数器/缓存) + 密钥解析
+    ├── aisix-storage/            # Redis(计数器/缓存) + 密钥解析（PG 归控制面）
     │
     │  ── 领域模块 ──
     ├── aisix-auth/               # Virtual Key, JWT, IP Filter
@@ -1268,7 +1268,7 @@ aisix/
 | `aisix-types` | 共享类型定义 | CanonicalRequest/Response, Usage, IDs, Error 枚举 |
 | `aisix-core` | 核心抽象 | RequestContext, GatewayState, 管线编排逻辑 |
 | `aisix-config` | 配置系统 | CompiledSnapshot, etcd watcher, 验证器 |
-| `aisix-storage` | 持久化 | PG repo, Redis repo, 密钥解析器 |
+| `aisix-storage` | Redis 计数器与缓存；密钥解析 | Redis repo, 密钥解析器（PG 不在数据面依赖中） |
 | `aisix-auth` | 认证 | Principal 解析, Key 校验 |
 | `aisix-policy` | 策略 | EffectivePolicy 合并, 访问决策 |
 | `aisix-router` | 路由 | RouteDecision, 策略实现, 健康状态 |
