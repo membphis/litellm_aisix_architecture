@@ -1075,67 +1075,66 @@ runtime:
   max_blocking_threads: 64
 ```
 
-运行时配置（Provider、Model Group、Virtual Key、Limits、Guardrail 等）的数据结构见下方 [etcd 数据模型](#etcd-数据模型)。
+运行时配置（Provider、Model、API Key）的数据结构见下方 [etcd 数据模型](#etcd-数据模型)。
 
 ### etcd 数据模型
 
 ```yaml
 # etcd key 前缀设计
 /aisix/
-  ├── config/
-  │   ├── version          # 全局配置版本号（单调递增）
-  │   └── settings         # 全局设置（server, observability, health）
-  │
   ├── providers/
-  │   ├── {provider_id}    # 每个 provider 一个 key
-  │   │                    # 值: JSON {id, kind, base_url, auth, models:[...]}
-  │   └── ...
+  │   └── {provider_id}    # Provider 绑定信息
   │
   ├── models/
-  │   ├── groups/
-  │   │   ├── {group_name} # model group 定义 + routes
-  │   │   │                # 值: JSON {name, match, strategy, fallbacks, routes:[...]}
-  │   │   └── ...
-  │   └── aliases/
-  │       ├── {alias}      # alias → group_name 映射（用于快速查找）
-  │       │                # 值: "default-fast-chat"
-  │       └── ...
+  │   └── {model_id}       # 大模型定义（含限流）
   │
-  ├── auth/
-  │   ├── keys/
-  │   │   ├── {key_hash}   # Virtual Key 元数据（不含明文密钥）
-  │   │   │                # 值: JSON {team_id, user_id, models:[...], limits:{...}}
-  │   │   └── ...
-  │   ├── jwt/
-  │   │   └── config       # JWT 配置（jwks_url, issuer, audience）
-  │   └── ip_filter        # IP 过滤规则
-  │
-  ├── policies/
-  │   ├── global           # 全局策略
-  │   ├── teams/
-  │   │   ├── {team_id}    # Team 级策略
-  │   │   └── ...
-  │   └── defaults         # 默认策略
-  │
-  ├── limits/
-  │   ├── global           # 全局限流配置
-  │   ├── teams/
-  │   │   └── {team_id}    # Team 级限流
-  │   └── keys/
-  │       └── {key_hash}   # Key 级限流
-  │
-  ├── cache/
-  │   └── config           # 缓存后端配置
-  │
-  ├── guardrails/
-  │   ├── {guardrail_name}  # Guardrail 定义
-  │   │                      # 值: JSON {name, mode, endpoint, timeout_ms, ...}
-  │   └── ...
-  │
-  └── health/
-      ├── checks             # 健康检查配置
-      └── cooldowns/
-          └── {target_id}    # Cooldown 状态
+  └── apikeys/
+      └── {apikey_id}      # 客户端调用身份（含限流）
+```
+
+**provider**：
+
+```json
+{
+  "id": "openai-us",
+  "kind": "openai",
+  "base_url": "https://api.openai.com",
+  "auth": { "secret_ref": "env:OPENAI_API_KEY" }
+}
+```
+
+**model**：
+
+```json
+{
+  "id": "gpt-4o-mini",
+  "provider_id": "openai-us",
+  "upstream_model": "gpt-4.1-mini",
+  "rate_limit": {
+    "rpm": 1000,
+    "rpd": 10000,
+    "tpm": 500000,
+    "tpd": 5000000,
+    "concurrency": 20
+  }
+}
+```
+
+**apikey**：
+
+```json
+{
+  "id": "key-abc123",
+  "key": "my-secret-key",
+  "allowed_models": ["gpt-4o-mini", "claude-sonnet"],
+  "rate_limit": {
+    "rpm": 100,
+    "rpd": 1000,
+    "tpm": 50000,
+    "tpd": 500000,
+    "concurrency": 5
+  }
+}
 ```
 
 ### 配置编译流程
