@@ -370,14 +370,14 @@ Client Request
   │                   ─── enforce user param / size check
   │
   ▼
-[7. Pre-Call Guardrails] ─── concurrent HTTP callbacks (PII masking, content safety)
-  │                      ─── can block / transform / annotate request
-  │
-  ▼
-[8. Rate Limit + Budget Precheck]
+[7. Rate Limit + Budget Precheck]
   │   ─── local shadow rate limiter (fast-reject obvious overages)
   │   ─── Redis authoritative rate limiter (RPM/TPM/concurrency/budget)
-  │   ─── TPM: estimate input + max_output tokens, reserve quota
+  │   ─── TPM: check remaining quota > 0 → allow; deduct actual tokens after response
+  │
+  ▼
+[8. Pre-Call Guardrails] ─── concurrent HTTP callbacks (PII masking, content safety)
+  │                      ─── can block / transform / annotate request
   │
   ▼
 [9. Cache Lookup] ─── memory/Redis cache hit?
@@ -449,8 +449,9 @@ Client Request
 │  1. Decode          deserialize body + extract Extractor      │
 │  2. Authentication  validate API Key → resolve tenant/key meta│
 │  3. Authorization   check if key may access model/operation   │
-│  4. PreCall Guard   call external guardrail HTTP service (opt)│
-│  5. RateLimit       Redis atomic op, decrement token bucket   │
+│  4. RateLimit       check remaining quota > 0; deduct actual  │
+│                     tokens after response                     │
+│  5. PreCall Guard   call external guardrail HTTP service (opt)│
 │  6. CacheLookup     semantic cache check, short-circuit on hit│
 │  7. RouteSelect     pick upstream + load-balance + fallback   │
 │  8. PreUpstream     inject prompt + replace vars + override   │
@@ -477,8 +478,8 @@ Client Request
 | 3 | **Decode** | `axum::Json<T>` Extractor 自动反序列化；自定义 `FromRequest` 处理 OpenAI 多 endpoint 变体 | 🔧 自定义 Extractor |
 | 4 | **Authentication** | 自定义 `FromRequestParts` Extractor，从 `Authorization: Bearer` 头提取 key，查 CompiledSnapshot 的 HashMap，验证 key 有效并解析 tenant/key 元数据 | 🔧 自定义 Extractor（模式清晰） |
 | 5 | **Authorization** | 在 Handler 中读取 key 元数据与 CompiledSnapshot 里的 policy 规则，检查该 key 是否有权访问请求的 model/操作，纯内存匹配 | 🔧 自定义逻辑（无外部依赖） |
-| 6 | **PreCall Guardrail** | `reqwest` 调用外部 HTTP guardrail 服务，await 结果，失败则 early return | 🔧 标准 HTTP 客户端调用 |
-| 7 | **RateLimit** | `redis` crate，原子操作扣减 token bucket | 🔧 需配合 Redis |
+| 6 | **RateLimit** | 两层检查：① local shadow（内存 EWMA 计数器，快速拒绝明显超限，保护 Redis）→ ② Redis 原子操作检查剩余配额（> 0 则放行）；实际 input/output token 消耗在响应后扣除 | 🔧 需配合 Redis |
+| 7 | **PreCall Guardrail** | `reqwest` 调用外部 HTTP guardrail 服务，await 结果，失败则 early return | 🔧 标准 HTTP 客户端调用 |
 | 8 | **Cache Lookup** | `redis` crate GET，命中则直接构造响应返回，跳过后续阶段 | 🔧 自定义（逻辑简单） |
 | 9 | **RouteSelect** | 读取 CompiledSnapshot 的 upstream 列表，按策略（round-robin / weighted / failover）选择，纯内存计算 | 🔧 自定义调度逻辑 |
 | 10 | **PreUpstream** | 可变克隆请求体，注入 `system` message，替换模板变量，覆盖参数 | 🔧 自定义变换逻辑 |
@@ -678,11 +679,11 @@ fn build_pipeline(key_meta: &KeyMeta, state: &AppState) -> Vec<Box<dyn PipelineS
     ];
 
     // 可选阶段：根据 key 配置决定是否加入
-    if key_meta.guardrail_enabled {
-        stages.push(Box::new(GuardrailStage::new(&state)));
-    }
     if key_meta.rate_limit_enabled {
         stages.push(Box::new(RateLimitStage::new(&state)));
+    }
+    if key_meta.guardrail_enabled {
+        stages.push(Box::new(GuardrailStage::new(&state)));
     }
     if key_meta.cache_enabled {
         stages.push(Box::new(CacheLookupStage::new(&state)));
@@ -869,12 +870,10 @@ request arrives
 
 ```
 request start:
-  estimate input_tokens + max_output_tokens
-  reserve quota in Redis
+  check remaining quota > 0 → allow
 
 request complete:
-  compute actual usage
-  settle delta in Redis (refund over-reservation, charge under-estimation)
+  deduct actual input + output tokens from Redis quota
 ```
 
 ### 并发租约（Redis Sorted Set）
