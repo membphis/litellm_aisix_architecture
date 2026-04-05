@@ -32,7 +32,7 @@
 
 ```
   Control Plane ──▶ etcd 集群 ──────────────▶ AISIX Data Plane
-                   (真正的 etcd 集群)           (etcd watch)
+                                               (etcd watch)
 ```
 
 ### 整体架构
@@ -40,7 +40,7 @@
 ```
       ┌──────────────────────────────────────────┐
       │            Control Plane                  │
-      │  CLI / Admin API / Dashboard / Ingress    │
+      │  CLI / Admin API / Dashboard              │
       └─────────────────┬────────────────────────┘
                         │
               ┌─────────▼─────────┐
@@ -312,7 +312,7 @@ pub trait CacheBackend: Send + Sync + 'static {
 Client Request
   │
   ▼
-[1. HTTP Ingress] ─── axum 路由匹配 /v1/chat/completions, /v1/embeddings, ...
+[1. Route Match] ─── axum 路由匹配 /v1/chat/completions, /v1/embeddings, ...
   │
   ▼
 [2. Decode + Normalize] ─── 反序列化为 CanonicalRequest（统一内部类型）
