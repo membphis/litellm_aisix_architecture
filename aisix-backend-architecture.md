@@ -1087,8 +1087,26 @@ runtime:
   ├── models/
   │   └── {model_id}       # 大模型定义（含限流）
   │
-  └── apikeys/
-      └── {apikey_id}      # 客户端调用身份（含限流）
+  ├── apikeys/
+  │   └── {apikey_id}      # 客户端调用身份（含限流）
+  │
+  └── policies/
+      └── {policy_id}      # 可复用限流策略（可被 provider/model/apikey 引用）
+```
+
+**policy**：
+
+```json
+{
+  "id": "standard-tier",
+  "rate_limit": {
+    "rpm": 500,
+    "rpd": 5000,
+    "tpm": 100000,
+    "tpd": 1000000,
+    "concurrency": 10
+  }
+}
 ```
 
 **provider**：
@@ -1099,13 +1117,7 @@ runtime:
   "kind": "openai",
   "base_url": "https://api.openai.com",
   "auth": { "secret_ref": "env:OPENAI_API_KEY" },
-  "rate_limit": {
-    "rpm": 5000,
-    "rpd": 50000,
-    "tpm": 2000000,
-    "tpd": 20000000,
-    "concurrency": 100
-  }
+  "policy_id": "standard-tier"
 }
 ```
 
@@ -1116,13 +1128,7 @@ runtime:
   "id": "gpt-4o-mini",
   "provider_id": "openai-us",
   "upstream_model": "gpt-4.1-mini",
-  "rate_limit": {
-    "rpm": 1000,
-    "rpd": 10000,
-    "tpm": 500000,
-    "tpd": 5000000,
-    "concurrency": 20
-  }
+  "policy_id": "standard-tier"
 }
 ```
 
@@ -1133,7 +1139,8 @@ runtime:
   "id": "key-abc123",
   "key": "my-secret-key",
   "allowed_models": ["gpt-4o-mini", "claude-sonnet"],
-  "rate_limit": {
+  "policy_id": "standard-tier",
+  "rate_limit": {       // 内联限流覆盖 policy 定义（优先级更高）
     "rpm": 100,
     "rpd": 1000,
     "tpm": 50000,
@@ -1154,6 +1161,8 @@ runtime:
 | **apikey** | 该 key 的调用上限 | 对接入方/租户做隔离 |
 
 三层各自独立计数，执行顺序：provider → model → apikey，遇到任意一层超限立即返回 429，不再继续检查后续层。
+
+**policy_id 与内联 rate_limit 的优先级**：若资源同时设置了 `policy_id` 和内联 `rate_limit`，以 `policy_id` 指向的 policy 为准（policy 覆盖内联值）；未设置 `policy_id` 时，使用内联 `rate_limit`。两者均未设置则该层不做限流。
 
 ### 配置编译流程
 
