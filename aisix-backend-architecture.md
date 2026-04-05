@@ -1173,22 +1173,19 @@ aisix-gateway 启动
 连接 etcd 集群
   │
   ▼
-[1] GET /aisix/config/version → 获取当前版本号
+[1] GET /aisix/ prefix (range) → 拉取全量配置（响应中携带当前 revision N）
   │
   ▼
-[2] GET /aisix/ prefix (range) → 拉取全量配置
+[2] 解析密钥引用（env/KMS/Vault → 实际值）
   │
   ▼
-[3] 解析密钥引用（env/KMS/Vault → 实际值）
-  │
-  ▼
-[4] 三层验证
+[3] 三层验证
   │    ├── Schema 验证：必填字段、枚举值、类型正确性
   │    ├── 语义验证：引用完整性、无环 fallback、限额合理
   │    └── 运行时预检：URL 格式、auth 完整性、能力兼容
   │
   ▼
-[5] 编译为 CompiledSnapshot
+[4] 编译为 CompiledSnapshot
   │    ├── 构建路由索引（alias → group, wildcard matcher）
   │    ├── 构建策略查找表（key → EffectivePolicy）
   │    ├── 预编译正则/模板
@@ -1196,10 +1193,10 @@ aisix-gateway 启动
   │    └── 构建 guardrail 链
   │
   ▼
-[6] ArcSwap 原子切换 → 开始服务流量
+[5] ArcSwap 原子切换 → 开始服务流量
   │
   ▼
-[7] WATCH /aisix/ prefix (from revision N+1) → 持续监听变更
+[6] WATCH /aisix/ prefix (from revision N+1) → 持续监听变更
   │
   ├── 收到 PUT 事件
   │    ├── 去抖（250-500ms 合并窗口）
