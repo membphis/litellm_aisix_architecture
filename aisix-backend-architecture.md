@@ -155,41 +155,30 @@ pub struct Usage {
 
 ### Virtual Key 元数据（KeyMeta）
 
-`KeyMeta` 是控制面配置与数据面执行之间的核心桥梁。Authentication 阶段从快照中按 key hash 查找并注入 `RequestContext`，此后整个 pipeline 通过它读取用户的权限和功能配置。
+`KeyMeta` 在 Authentication 阶段从 etcd 快照中按 key hash 加载，注入 `RequestContext`。它只保存**身份标识**和**功能开关**；具体配置（限速阈值、模型列表、预算等）保留在快照中，各 pipeline stage 按 id 按需查找。
 
 ```rust
 // ===== aisix-types =====
 
-/// Virtual Key 元数据：控制面配置 → 数据面执行的桥梁
-/// 从 etcd 快照中加载，Authentication 后注入 RequestContext
+/// Virtual Key 元数据：从 etcd 快照中加载，Authentication 后注入 RequestContext
+/// 只保存身份标识和功能开关；具体配置（限速阈值、模型列表、预算等）
+/// 保留在快照中，各 pipeline stage 按 id 按需查找
 pub struct KeyMeta {
-    // ── 身份 ──────────────────────────────────────────────────
-    pub key_id:      String,             // key 的唯一标识（bearer token 的 hash）
-    pub team_id:     Option<String>,     // 所属 Team
-    pub user_id:     Option<String>,     // 创建者/归属用户
-    pub customer_id: Option<String>,     // 最终用户标识（x-litellm-end-user）
+    // ── 身份标识（供各 stage 按 id 查快照）──────────
+    pub key_id:      String,          // bearer token 的 hash，索引键
+    pub team_id:     Option<String>,  // 查 team 层级策略
+    pub user_id:     Option<String>,
+    pub customer_id: Option<String>,  // 最终用户标识（x-litellm-end-user）
 
-    // ── 访问控制 ───────────────────────────────────────────────
-    pub allowed_models: Vec<String>,     // 空表示不限；支持通配 ["gpt-4o*", "claude-*"]
-    pub allowed_routes: Vec<String>,     // 路由标签过滤，空表示不限
-
-    // ── 速率限制（None 表示继承 Team/Global 配置）─────────────
-    pub rpm:              Option<u32>,   // 每分钟请求数上限
-    pub tpm:              Option<u64>,   // 每分钟 token 数上限
-    pub concurrent_limit: Option<u32>,  // 并发请求数上限
-
-    // ── 预算 ────────────────────────────────────────────────────
-    pub monthly_budget_usd: Option<f64>,
-
-    // ── 功能开关（Authentication 后驱动 build_pipeline）─────────
+    // ── 功能开关（Authentication 后驱动 build_pipeline）──
     pub rate_limit_enabled:      bool,
     pub cache_enabled:           bool,
     pub guardrail_enabled:       bool,
     pub prompt_template_enabled: bool,
 
-    // ── 元信息 ──────────────────────────────────────────────────
-    pub alias:      Option<String>,      // 用户自定义备注名
-    pub expires_at: Option<DateTime>,    // None 表示永不过期
+    // ── 元信息 ────────────────────────────────────────
+    pub alias:      Option<String>,   // 用户自定义备注名
+    pub expires_at: Option<DateTime>, // None 表示永不过期
 }
 ```
 
