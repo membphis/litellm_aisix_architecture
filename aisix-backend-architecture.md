@@ -122,7 +122,7 @@
 
 两者通过 etcd 解耦：aisix-admin 写，aisix-gateway 读，互不直接调用。
 
-aisix-admin 管理的实体包括：Provider 配置、Virtual Key、Team/Member、Model Group、限流策略、Guardrail 规则等。MVP 阶段可以直接通过 `etcdctl` 或 Admin API 写入；Dashboard 为可选扩展。
+aisix-admin 管理的实体包括：Provider 配置、Virtual Key、Team/Member、Model、限流策略、Guardrail 规则等。MVP 阶段可以直接通过 `etcdctl` 或 Admin API 写入；Dashboard 为可选扩展。
 
 ---
 
@@ -390,9 +390,8 @@ Client Request
   ├── hit ──▶ [响应归一化] ──▶ [返回缓存响应]
   │
   ▼ miss
-[10. Routing] ─── model group 解析（别名/通配符/标签匹配）
-  │            ─── 策略选择（simple-shuffle/least-busy/latency/usage）
-  │            ─── fallback 计划生成
+[10. Routing] ─── 按 model name 查 ModelConfig → 确定 provider
+  │            ─── fallback 计划生成（备用 model 列表）
   │            ─── 冷却排除
   │
   ▼
@@ -1053,7 +1052,7 @@ pub enum ErrorKind {
 ```yaml
 # aisix-gateway.yaml — 进程启动配置
 # 仅包含启动时静态所需内容。
-# Provider、Model Group、Virtual Key、Limits、Guardrail 等运行时配置
+# Provider、Model、Virtual Key、Limits、Guardrail 等运行时配置
 # 均由 aisix-admin 写入 etcd，aisix-gateway 启动后通过 watch 动态加载。
 
 server:
@@ -1194,9 +1193,9 @@ aisix-gateway 启动
 ### 验证错误报告示例
 
 ```
-model_groups[1].routes[2].target:
-  unknown target "azure-west/gpt-4o"
-  did you mean "azure-eastus/gpt-4o-mini"?
+apikeys[0].allowed_models[1]:
+  unknown model "gpt-4o-mini-fast"
+  did you mean "gpt-4o-mini"?
 ```
 
 ---
@@ -1224,7 +1223,7 @@ aisix/
     │  ── 领域模块 ──
     ├── aisix-auth/               # Virtual Key, JWT, IP Filter
     ├── aisix-policy/             # 层级策略解析, 模型/标签访问控制, 参数变异
-    ├── aisix-router/             # model group 解析, 路由策略, fallback, cooldown
+    ├── aisix-router/             # model 解析, fallback, cooldown
     ├── aisix-ratelimit/          # RPM/TPM/并发/预算检查, 本地影子 + Redis 权威
     ├── aisix-cache/              # 内存/Redis/Disk/S3/语义缓存后端
     ├── aisix-providers/          # Provider 编解码器, 请求/响应转换, 错误归一化
