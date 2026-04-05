@@ -55,7 +55,7 @@
       ▼                 ▼                   ▼
   ┌─────────┐     ┌─────────┐        ┌─────────┐
   │ Node A  │     │ Node B  │        │ Node C  │
-  │ aisixd  │     │ aisixd  │        │ aisixd  │
+  │ aisix-gateway  │     │ aisix-gateway  │        │ aisix-gateway  │
   │         │     │         │        │         │
   │ etcd    │     │ etcd    │        │ etcd    │
   │ watcher │     │ watcher │        │ watcher │
@@ -111,16 +111,16 @@
 
 ### 控制面（aisix-admin）
 
-**aisix-admin** 是独立服务，与 aisixd 完全分离：
+**aisix-admin** 是独立服务，与 aisix-gateway 完全分离：
 
-| 维度 | aisix-admin（控制面） | aisixd（数据面） |
+| 维度 | aisix-admin（控制面） | aisix-gateway（数据面） |
 |------|----------------------|-----------------|
 | **职责** | 写 etcd / PostgreSQL | 只读 etcd |
 | **API** | Admin REST API（CRUD 配置实体） | LLM Proxy API（/v1/...） |
 | **LLM 流量** | 不处理 | 全部处理 |
 | **通信** | 写入 etcd | Watch etcd 变更 |
 
-两者通过 etcd 解耦：aisix-admin 写，aisixd 读，互不直接调用。
+两者通过 etcd 解耦：aisix-admin 写，aisix-gateway 读，互不直接调用。
 
 aisix-admin 管理的实体包括：Provider 配置、Virtual Key、Team/Member、Model Group、限流策略、Guardrail 规则等。MVP 阶段可以直接通过 `etcdctl` 或 Admin API 写入；Dashboard 为可选扩展。
 
@@ -1236,7 +1236,7 @@ observability:
 ### 配置编译流程
 
 ```
-aisixd 启动
+aisix-gateway 启动
   │
   ▼
 连接 etcd 集群
@@ -1305,7 +1305,7 @@ model_groups[1].routes[2].target:
 aisix/
 ├── Cargo.toml                    # workspace 根
 ├── bin/
-│   └── aisixd/                   # 可执行入口
+│   └── aisix-gateway/                   # 可执行入口
 │       └── main.rs
 └── crates/
     │
@@ -1373,7 +1373,7 @@ aisix-core ←── aisix-config
 aisix-storage → aisix-types + aisix-core
 aisix-runtime → all domain crates
 aisix-server → aisix-runtime + aisix-observability
-aisixd → aisix-server
+aisix-gateway → aisix-server
 ```
 
 ---
