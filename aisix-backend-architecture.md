@@ -101,14 +101,13 @@
 
 ### 为什么选择 etcd 协议
 
-| 维度 | PG + Redis pub/sub | etcd 协议统一（选择） |
-|------|---|---|
-| **数据面复杂度** | 需要同时对接 PG + Redis + 文件 | 只对接 etcd，单一协议 |
-| **部署灵活性** | 绑定 PG + Redis | 可选真 etcd 或 PG + DP Manager |
-| **APISIX 生态兼容** | 不兼容 | 天然兼容 APISIX 控制面 |
-| **Watch 语义** | Redis pub/sub 不可靠，需自实现 | etcd watch 原生支持，revision 保证不丢事件 |
-| **多节点一致性** | 需要自己保证 | etcd MVCC 天然保证 |
-| **配置回滚** | 需要自己实现 | etcd 历史版本天然支持 |
+| 优势 | 说明 |
+|------|------|
+| **单一协议** | 数据面只对接 etcd，无需同时维护多个存储客户端 |
+| **Watch 语义可靠** | etcd watch 原生支持，revision 保证不丢事件 |
+| **MVCC 一致性** | 多节点部署下配置一致性天然保证，无需自行实现 |
+| **配置回滚** | etcd 历史版本天然支持，无需额外实现 |
+| **APISIX 生态兼容** | 天然兼容 APISIX 控制面生态 |
 
 ---
 
@@ -154,23 +153,43 @@ pub struct Usage {
 }
 ```
 
-### 请求上下文（Exchange）
+### Virtual Key 元数据（KeyMeta）
+
+`KeyMeta` 是控制面配置与数据面执行之间的核心桥梁。Authentication 阶段从快照中按 key hash 查找并注入 `RequestContext`，此后整个 pipeline 通过它读取用户的权限和功能配置。
 
 ```rust
-// ===== aisix-core =====
+// ===== aisix-types =====
 
-/// 贯穿整个管线的状态容器
-pub struct Exchange {
-    pub request_id: Uuid,
-    pub started_at: Instant,
-    pub operation: Operation,
-    pub request: CanonicalRequest,
-    pub principal: Option<Principal>,          // 阶段 Authentication 后填充
-    pub policy: Option<Arc<EffectivePolicy>>,  // 阶段 Authorization 后填充
-    pub route: Option<RouteDecision>,          // 阶段 RouteSelect 后填充
-    pub usage: UsageAccumulator,               // 流式增量累计
-    pub labels: RequestLabels,                 // tags, trace info
-    pub streaming: bool,
+/// Virtual Key 元数据：控制面配置 → 数据面执行的桥梁
+/// 从 etcd 快照中加载，Authentication 后注入 RequestContext
+pub struct KeyMeta {
+    // ── 身份 ──────────────────────────────────────────────────
+    pub key_id:      String,             // key 的唯一标识（bearer token 的 hash）
+    pub team_id:     Option<String>,     // 所属 Team
+    pub user_id:     Option<String>,     // 创建者/归属用户
+    pub customer_id: Option<String>,     // 最终用户标识（x-litellm-end-user）
+
+    // ── 访问控制 ───────────────────────────────────────────────
+    pub allowed_models: Vec<String>,     // 空表示不限；支持通配 ["gpt-4o*", "claude-*"]
+    pub allowed_routes: Vec<String>,     // 路由标签过滤，空表示不限
+
+    // ── 速率限制（None 表示继承 Team/Global 配置）─────────────
+    pub rpm:              Option<u32>,   // 每分钟请求数上限
+    pub tpm:              Option<u64>,   // 每分钟 token 数上限
+    pub concurrent_limit: Option<u32>,  // 并发请求数上限
+
+    // ── 预算 ────────────────────────────────────────────────────
+    pub monthly_budget_usd: Option<f64>,
+
+    // ── 功能开关（Authentication 后驱动 build_pipeline）─────────
+    pub rate_limit_enabled:      bool,
+    pub cache_enabled:           bool,
+    pub guardrail_enabled:       bool,
+    pub prompt_template_enabled: bool,
+
+    // ── 元信息 ──────────────────────────────────────────────────
+    pub alias:      Option<String>,      // 用户自定义备注名
+    pub expires_at: Option<DateTime>,    // None 表示永不过期
 }
 ```
 
@@ -186,14 +205,14 @@ pub trait ProviderCodec: Send + Sync + 'static {
     /// 将 CanonicalRequest 构建为上游 HTTP 请求
     fn build_request(
         &self,
-        ex: &Exchange,
+        ctx: &RequestContext,
         target: &ResolvedTarget,
     ) -> Result<http::Request<Body>, GatewayError>;
 
     /// 解析上游 HTTP 响应为统一输出
     async fn parse_response(
         &self,
-        ex: &Exchange,
+        ctx: &RequestContext,
         target: &ResolvedTarget,
         resp: http::Response<Incoming>,
     ) -> Result<ProviderOutput, GatewayError>;
@@ -235,18 +254,18 @@ pub enum BuiltinProvider {
 impl BuiltinProvider {
     pub async fn execute(
         &self,
-        ex: &Exchange,
+        ctx: &RequestContext,
         target: &ResolvedTarget,
         client: &UpstreamClient,
     ) -> Result<ProviderOutput, GatewayError> {
         match self {
-            Self::OpenAI(p) => client.execute_codec(p, ex, target).await,
-            Self::Anthropic(p) => client.execute_codec(p, ex, target).await,
-            Self::AzureOpenAI(p) => client.execute_codec(p, ex, target).await,
-            Self::Vertex(p) => client.execute_codec(p, ex, target).await,
-            Self::Bedrock(p) => client.execute_codec(p, ex, target).await,
-            Self::Ollama(p) => client.execute_codec(p, ex, target).await,
-            Self::Dynamic(p) => client.execute_codec(p.as_ref(), ex, target).await,
+            Self::OpenAI(p) => client.execute_codec(p, ctx, target).await,
+            Self::Anthropic(p) => client.execute_codec(p, ctx, target).await,
+            Self::AzureOpenAI(p) => client.execute_codec(p, ctx, target).await,
+            Self::Vertex(p) => client.execute_codec(p, ctx, target).await,
+            Self::Bedrock(p) => client.execute_codec(p, ctx, target).await,
+            Self::Ollama(p) => client.execute_codec(p, ctx, target).await,
+            Self::Dynamic(p) => client.execute_codec(p.as_ref(), ctx, target).await,
         }
     }
 }
@@ -279,14 +298,14 @@ pub trait RateLimiter: Send + Sync + 'static {
     /// 请求前检查（预估 token）
     async fn precheck(
         &self,
-        ex: &Exchange,
+        ctx: &RequestContext,
         limits: &ResolvedLimits,
     ) -> Result<RateDecision, GatewayError>;
 
     /// 请求后结算（实际 usage）
     async fn settle(
         &self,
-        ex: &Exchange,
+        ctx: &RequestContext,
         usage: &Usage,
     ) -> Result<(), GatewayError>;
 }
@@ -318,7 +337,7 @@ Client Request
 [2. Decode + Normalize] ─── 反序列化为 CanonicalRequest（统一内部类型）
   │
   ▼
-[3. RequestContext 创建] ─── request_id + trace span + Exchange 对象
+[3. RequestContext 创建] ─── request_id + trace span + RequestContext 对象
   │
   ▼
 [4. Authentication] ─── Virtual Key / JWT / IP Filter
@@ -600,7 +619,8 @@ struct RequestContext {
     raw_request: ChatCompletionRequest,
 
     // ── Authentication 后填入 ───────────────────────
-    key_meta: KeyMeta,
+    key_meta: KeyMeta,           // 控制面配置的入口：权限 + 功能开关 + 限额
+                                 // 决定 build_pipeline 组合哪些可选阶段
 
     // ── RouteSelect 后填入 ──────────────────────────
     selected_upstream: Upstream,
@@ -610,6 +630,8 @@ struct RequestContext {
     response_cached: bool,               // 是否命中缓存
 }
 ```
+
+`key_meta` 是整个 pipeline 的配置枢纽：它由控制面在创建 Virtual Key 时定义，Authentication 阶段从不可变快照中加载后注入此处，之后限流、缓存、guardrail 等所有可选阶段都从中读取自己需要的配置，无需再访问全局状态。
 
 #### 固定阶段 vs 可选阶段
 
@@ -1249,7 +1271,7 @@ aisix/
     │
     │  ── 基础层 ──
     ├── aisix-types/              # 共享类型：CanonicalRequest/Response, Usage, IDs, Error
-    ├── aisix-core/               # 核心抽象：Exchange, GatewayState, 管线编排
+    ├── aisix-core/               # 核心抽象：RequestContext, GatewayState, 管线编排
     ├── aisix-config/             # etcd watch + 编译快照 + 验证 + 热加载
     │
     │  ── 存储层 ──
@@ -1276,7 +1298,7 @@ aisix/
 | Crate | 职责 | 拥有的状态/数据 |
 |-------|------|----------------|
 | `aisix-types` | 共享类型定义 | CanonicalRequest/Response, Usage, IDs, Error 枚举 |
-| `aisix-core` | 核心抽象 | Exchange, GatewayState, 管线编排逻辑 |
+| `aisix-core` | 核心抽象 | RequestContext, GatewayState, 管线编排逻辑 |
 | `aisix-config` | 配置系统 | CompiledSnapshot, etcd watcher, 验证器 |
 | `aisix-storage` | 持久化 | PG repo, Redis repo, 密钥解析器 |
 | `aisix-auth` | 认证 | Principal 解析, Key 校验 |
