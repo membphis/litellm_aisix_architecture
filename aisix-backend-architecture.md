@@ -406,9 +406,9 @@ Client Request
   │    ▼                                                             │
   │  [cache write (optional)]                                        │
   │    ▼                                                             │
-  │  [async Spend/Logging] ─── emit UsageEvent to structlog + cb sink│
-  │    ▼                                                             │
   │  [return JSON response]                                          │
+  │    ▼                                                             │
+  │  [async Spend/Logging] ─── emit UsageEvent to structlog + cb sink│
   │                                                                  │
   └── streaming branch ──────────────────────────────────────────────┐
        ▼                                                             │
