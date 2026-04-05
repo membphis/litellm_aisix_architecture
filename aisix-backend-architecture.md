@@ -1098,7 +1098,14 @@ runtime:
   "id": "openai-us",
   "kind": "openai",
   "base_url": "https://api.openai.com",
-  "auth": { "secret_ref": "env:OPENAI_API_KEY" }
+  "auth": { "secret_ref": "env:OPENAI_API_KEY" },
+  "rate_limit": {
+    "rpm": 5000,
+    "rpd": 50000,
+    "tpm": 2000000,
+    "tpd": 20000000,
+    "concurrency": 100
+  }
 }
 ```
 
@@ -1135,6 +1142,18 @@ runtime:
   }
 }
 ```
+
+### 三层限流语义
+
+`rate_limit` 字段内联在 provider、model、apikey 三个资源中，各层独立检查，**任一层超限即返回 429**：
+
+| 层级 | 含义 | 典型用途 |
+|------|------|---------|
+| **provider** | 该 provider 全局上限（对应 provider 账号的配额） | 防止网关整体打爆上游账号限额 |
+| **model** | 该 model 的全局上限（所有 apikey 汇总） | 控制某个模型的整体用量 |
+| **apikey** | 该 key 的调用上限 | 对接入方/租户做隔离 |
+
+三层各自独立计数，执行顺序：provider → model → apikey，遇到任意一层超限立即返回 429，不再继续检查后续层。
 
 ### 配置编译流程
 
