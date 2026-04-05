@@ -76,7 +76,7 @@
 │  ┌───────────────────────────────────▼────────────────┐  │
 │  │              Request Pipeline (axum/tower)         │  │
 │  │                                                    │  │
-│  │  Auth → Policy → Mutation → Guardrail → RateLimit  │  │
+│  │  Authc → Authz → Mutation → Guardrail → RateLimit  │  │
 │  │  → Cache → Router → Provider → Guardrail → Spend   │  │
 │  │  → Logging → Response                              │  │
 │  └──────────────────────────┬─────────────────────────┘  │
