@@ -175,7 +175,7 @@ pub struct Usage {
 /// 保留在快照中，各 pipeline stage 按 id 按需查找，自行决定是否有实际操作
 pub struct KeyMeta {
     // ── 身份标识（供各 stage 按 id 查快照）──────────
-    pub key_id:      String,          // bearer token 的 hash，索引键
+    pub key_id:      String,          // etcd 中 apikey 记录的 ID（如 "key-abc123"），用于查快照
     pub team_id:     Option<String>,  // 查 team 层级策略
     pub user_id:     Option<String>,
     pub customer_id: Option<String>,  // 最终用户标识（x-litellm-end-user）
@@ -225,6 +225,10 @@ pub enum ProviderOutput {
         status: StatusCode,
         headers: HeaderMap,
         stream: Pin<Box<dyn Stream<Item = Result<Bytes, GatewayError>> + Send>>,
+        // 注意：Stream 变体不携带 usage 字段。
+        // stream_chunk 阶段在迭代 StreamEvent 时，遇到 StreamEvent::Usage 事件
+        // 则将累计值写入 ctx.usage: Option<TokenUsage>。
+        // PostCall 阶段从 ctx.usage 读取计费数据，而非从 ProviderOutput 读取。
     },
 }
 ```
@@ -409,8 +413,9 @@ Client Request
       [Stream Transcoder] ─── upstream SSE → StreamEvent → OpenAI SSE│
        ▼                    (unified parsing, all upstream formats)  │
       [During-Stream Guardrails] ─── timeout-only HTTP callback      │
-       ▼                                                             │
-      [incremental Usage tracking] ─── accumulate token counts       │
+        ▼                                                            │
+        [incremental Usage tracking] ─── on StreamEvent::Usage:      │
+               accumulate tokens → write ctx.usage                   │
        ▼                                                             │
       [client SSE stream]                                            │
        ▼                                                             │
@@ -472,7 +477,7 @@ Client Request
 | 3 | **Decode** | `axum::Json<T>` Extractor 自动反序列化；自定义 `FromRequest` 处理 OpenAI 多 endpoint 变体 | 🔧 自定义 Extractor |
 | 4 | **Authentication** | 自定义 `FromRequestParts` Extractor，从 `Authorization: Bearer` 头提取 key，查 CompiledSnapshot 的 HashMap，验证 key 有效并解析 tenant/key 元数据 | 🔧 自定义 Extractor（模式清晰） |
 | 5 | **Authorization** | 在 Handler 中读取 key 元数据与 CompiledSnapshot 里的 policy 规则，检查该 key 是否有权访问请求的 model/操作，纯内存匹配 | 🔧 自定义逻辑（无外部依赖） |
-| 6 | **RateLimit** | 两层检查：① local shadow（内存 EWMA 计数器，快速拒绝明显超限，保护 Redis）→ ② Redis 原子操作检查剩余配额（> 0 则放行）；实际 input/output token 消耗在响应后扣除 | 🔧 需配合 Redis |
+| 6 | **RateLimit** | 两层检查：① local shadow（内存 governor/GCRA 计数器，快速拒绝明显超限，保护 Redis）→ ② Redis 原子操作检查剩余配额（> 0 则放行）；实际 input/output token 消耗在响应后扣除 | 🔧 需配合 Redis |
 | 7 | **PreCall Guardrail** | `reqwest` 调用外部 HTTP guardrail 服务，await 结果，失败则 early return | 🔧 标准 HTTP 客户端调用 |
 | 8 | **Cache Lookup** | `redis` crate GET，命中则直接构造响应返回，跳过后续阶段 | 🔧 自定义（逻辑简单） |
 | 9 | **RouteSelect** | 读取 CompiledSnapshot 的 upstream 列表，按策略（round-robin / weighted / failover）选择，纯内存计算 | 🔧 自定义调度逻辑 |
@@ -547,6 +552,8 @@ where
         let app_state = AppState::from_ref(state);
         let snapshot = app_state.snapshot.load();
         let token = extract_bearer_token(&parts.headers)?;
+        // snapshot.keys: HashMap<String, KeyMeta>，以明文 Bearer token 为键
+        // etcd 中 apikey 记录的 "key" 字段（明文）在编译快照时作为 HashMap 的 key
         let key_meta = snapshot.keys.get(token).ok_or(GatewayError::Unauthorized)?;
         Ok(AuthenticatedKey(key_meta.clone()))
     }
@@ -613,7 +620,7 @@ send request ──▶ upstream A
 ```rust
 struct RequestContext {
     // ── Decode 后填入 ──────────────────────────────
-    raw_request: ChatCompletionRequest,
+    request: CanonicalRequest,          // Chat / Embeddings / ... 统一枚举，覆盖所有端点
 
     // ── Authentication 后填入 ───────────────────────
     key_meta: KeyMeta,           // 身份标识，各阶段按 id 查配置快照
@@ -652,9 +659,9 @@ struct RequestContext {
 async fn chat_completions(
     State(state): State<AppState>,
     AuthenticatedKey(key_meta): AuthenticatedKey,  // Authentication（Extractor）
-    Json(raw_request): Json<ChatCompletionRequest>, // Decode（axum 自动完成）
+    Json(body): Json<ChatCompletionRequest>,        // Decode（axum 自动完成）
 ) -> Result<Response, GatewayError> {
-    let mut ctx = RequestContext::new(raw_request, key_meta);
+    let mut ctx = RequestContext::new(CanonicalRequest::Chat(body), key_meta);
 
     authorization::check(&ctx, &state)?;
     rate_limit::check(&ctx, &state).await?;      // 有配置则查 Redis，否则 no-op
@@ -753,20 +760,22 @@ in-flight requests keep old snapshot until done (Arc refcount)
 基于上述分析，建议按以下顺序攻克技术风险：
 
 ```
-Phase 0 (baseline validation)
+Step 1 (baseline validation)
   └── run a non-streaming chat completion end-to-end
       validate: Authentication → RateLimit → RouteSelect → sync HTTP proxy → PostCall
       all 🔧 level, no ⚠️, good for building confidence first
 
-Phase 1 (streaming core)
+Step 2 (streaming core)
   └── tackle the three StreamChunk hard points
        order: frame boundary parsing → multi-provider transcoding → pre-first-byte fallback
       highest technical difficulty; test against real providers early
 
-Phase 2 (full features)
+Step 3 (full features)
   └── incrementally add: Guardrail → semantic cache → full Policy rules
       all 🔧 level, add as needed once the core path is proven
 ```
+
+> **注意**：上述 Step 1/2/3 是技术风险攻克顺序，与第十一章的 MVP Phase 1/2/3 是两个不同维度：前者描述"先做哪个技术点"，后者描述"按季度交付的产品里程碑"。
 
 ---
 
@@ -787,7 +796,7 @@ Phase 2 (full features)
 request arrives
   │
   ▼
-[local shadow rate limiter] ─── in-memory EWMA counter, ultra-low cost
+[local shadow rate limiter] ─── in-memory governor (GCRA) counter, ultra-low cost
   │                                obvious overages → reject (protect Redis)
   │
   ▼ pass
@@ -1075,6 +1084,8 @@ runtime:
 
 **apikey**：
 
+> API Key 以**明文**存储在 etcd 中。编译快照时，以 `key` 字段的明文值为键建立 `HashMap<String, KeyMeta>`，Authentication 阶段直接比较 Bearer token 与明文值。安全边界由 etcd 访问权限和 TLS 传输保障。
+
 ```json
 {
   "id": "key-abc123",
@@ -1103,7 +1114,7 @@ runtime:
 
 三层各自独立计数，执行顺序：provider → model → apikey，遇到任意一层超限立即返回 429，不再继续检查后续层。
 
-**policy_id 与内联 rate_limit 的优先级**：若资源同时设置了 `policy_id` 和内联 `rate_limit`，以 `policy_id` 指向的 policy 为准（policy 覆盖内联值）；未设置 `policy_id` 时，使用内联 `rate_limit`。两者均未设置则该层不做限流。
+**policy_id 与内联 rate_limit 的优先级**：若资源同时设置了 `policy_id` 和内联 `rate_limit`，以内联 `rate_limit` 为准（具体覆盖通用，inline 覆盖 policy_id）；未设置内联 `rate_limit` 时，使用 `policy_id` 指向的 policy。两者均未设置则该层不做限流。
 
 ### 配置编译流程
 
@@ -1259,7 +1270,7 @@ aisix-gateway → aisix-server
 | PostgreSQL | `sqlx` | 编译时 SQL 检查, 异步 |
 | Redis | `redis` | 异步 + Lua 脚本 |
 | JWT | `jsonwebtoken` | JWT 认证 |
-| 限流 | `governor` | Token Bucket / Leaky Bucket |
+| 限流 | `governor` | Token Bucket / GCRA (sliding window)，用于本地 shadow 限流器 |
 | 指标 | `prometheus` | Prometheus exporter |
 | 追踪 | `tracing` + `opentelemetry` | 结构化日志 + OTEL |
 | 配置原子切换 | `arc-swap` | ArcSwap 无锁读取 |
@@ -1375,3 +1386,472 @@ aisix-gateway → aisix-server
 | ModelMux | Rust Vertex AI-OpenAI 代理 |
 | CloakPipe | Rust PII 隐私代理（axum） |
 | Apache APISIX | 高性能 API Gateway（参考其架构模式） |
+
+---
+
+## 十四、验收测试用例
+
+> **覆盖范围**：本章用例覆盖第十一章 **Phase 1 — MVP（核心数据面）** 的全部交付项，包括：
+> `/v1/chat/completions` + `/v1/embeddings`、Virtual Key 鉴权、RPM/TPM/并发限流（Redis）、
+> 模型路由、流式代理、基础 Spend 计费、etcd 热加载。
+> Phase 2/3 的功能（Guardrail、语义缓存、Budget 层级等）不在本章范围内。
+>
+> **格式说明**：测试用例均为 Rust 集成测试（`#[tokio::test]`），可在 CI 中自动执行。
+> 外部依赖通过 wiremock（Mock HTTP Server）模拟上游 Provider，etcd/Redis 通过 docker-compose 提供。
+> 所有测试共享一个 `TestApp::start()` 辅助函数，该函数：
+> 1. 启动内嵌 etcd（或连接 docker-compose etcd）
+> 2. 启动内嵌 Redis（或连接 docker-compose Redis）
+> 3. 写入测试所需的 etcd 配置（provider、model、apikey、policy）
+> 4. 启动 aisix-gateway 并等待健康检查通过
+> 5. 返回 `TestApp { client, base_url, mock_server, etcd_client }`
+
+### TC-01：有效 API Key 鉴权通过
+
+```rust
+/// 验证：合法 Bearer token → 请求被转发，返回 200
+#[tokio::test]
+async fn test_valid_api_key_passes() {
+    let app = TestApp::start().await;
+    // etcd 中已注册 key "sk-valid-key" → key_id "key-001"
+    // mock upstream 返回正常 chat completion 响应
+
+    let resp = app.client
+        .post(format!("{}/v1/chat/completions", app.base_url))
+        .bearer_auth("sk-valid-key")
+        .json(&json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send().await.unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["choices"][0]["message"]["content"].is_string());
+}
+```
+
+### TC-02：无效 API Key → 401
+
+```rust
+/// 验证：不存在的 Bearer token → 立即返回 401，不转发上游
+#[tokio::test]
+async fn test_invalid_api_key_rejected() {
+    let app = TestApp::start().await;
+
+    let resp = app.client
+        .post(format!("{}/v1/chat/completions", app.base_url))
+        .bearer_auth("sk-nonexistent")
+        .json(&json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send().await.unwrap();
+
+    assert_eq!(resp.status(), 401);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "authentication_error");
+    // mock upstream 没有收到任何请求
+    app.mock_server.assert_no_pending_requests().await;
+}
+```
+
+### TC-03：缺少 Authorization 头 → 401
+
+```rust
+/// 验证：请求不携带 Authorization 头 → 401
+#[tokio::test]
+async fn test_missing_api_key_rejected() {
+    let app = TestApp::start().await;
+
+    let resp = app.client
+        .post(format!("{}/v1/chat/completions", app.base_url))
+        // 故意不设置 bearer_auth
+        .json(&json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send().await.unwrap();
+
+    assert_eq!(resp.status(), 401);
+}
+```
+
+### TC-04：内联 RPM 限流触发 → 429
+
+```rust
+/// 验证：apikey 内联 rate_limit.rpm=2，第 3 次请求返回 429
+#[tokio::test]
+async fn test_rate_limit_inline_enforced() {
+    let app = TestApp::start_with_config(ApiKeyConfig {
+        key: "sk-limited",
+        rate_limit: Some(InlineRateLimit { rpm: 2, ..Default::default() }),
+        policy_id: None,
+        ..Default::default()
+    }).await;
+
+    for i in 0..2 {
+        let resp = app.chat("sk-limited", "gpt-4o-mini").await;
+        assert_eq!(resp.status(), 200, "request {i} should pass");
+    }
+
+    let resp = app.chat("sk-limited", "gpt-4o-mini").await;
+    assert_eq!(resp.status(), 429, "3rd request should be rate limited");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "rate_limit_error");
+}
+```
+
+### TC-05：policy_id 限流触发 → 429
+
+```rust
+/// 验证：apikey 引用 policy_id，policy rpm=2，第 3 次请求返回 429
+#[tokio::test]
+async fn test_rate_limit_policy_id_enforced() {
+    let app = TestApp::start_with_config(ApiKeyConfig {
+        key: "sk-policy-limited",
+        rate_limit: None,
+        policy_id: Some("strict-tier"),  // strict-tier: rpm=2
+        ..Default::default()
+    }).await;
+
+    for i in 0..2 {
+        let resp = app.chat("sk-policy-limited", "gpt-4o-mini").await;
+        assert_eq!(resp.status(), 200, "request {i} should pass");
+    }
+
+    let resp = app.chat("sk-policy-limited", "gpt-4o-mini").await;
+    assert_eq!(resp.status(), 429);
+}
+```
+
+### TC-06：内联 rate_limit 覆盖 policy_id（inline 优先）
+
+```rust
+/// 验证：同时设置 policy_id(rpm=2) 和 inline rate_limit(rpm=10)
+///      以 inline 为准，前 10 次请求应通过，第 11 次才被拒绝
+#[tokio::test]
+async fn test_inline_overrides_policy_id() {
+    let app = TestApp::start_with_config(ApiKeyConfig {
+        key: "sk-inline-wins",
+        rate_limit: Some(InlineRateLimit { rpm: 10, ..Default::default() }),
+        policy_id: Some("strict-tier"),  // strict-tier: rpm=2（应被覆盖）
+        ..Default::default()
+    }).await;
+
+    // 前 10 次应全部通过（inline rpm=10 生效）
+    for i in 0..10 {
+        let resp = app.chat("sk-inline-wins", "gpt-4o-mini").await;
+        assert_eq!(resp.status(), 200, "request {i} should pass with inline limit");
+    }
+
+    // 第 11 次超过 inline rpm=10 限制
+    let resp = app.chat("sk-inline-wins", "gpt-4o-mini").await;
+    assert_eq!(resp.status(), 429);
+}
+```
+
+### TC-07：Chat 非流式代理成功
+
+```rust
+/// 验证：/v1/chat/completions 非流式请求，上游正常响应，gateway 原样转发
+#[tokio::test]
+async fn test_chat_completion_proxy_non_streaming() {
+    let app = TestApp::start().await;
+    // mock upstream 返回标准 OpenAI chat completion JSON
+
+    let resp = app.client
+        .post(format!("{}/v1/chat/completions", app.base_url))
+        .bearer_auth("sk-valid-key")
+        .json(&json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Say hello"}],
+            "stream": false
+        }))
+        .send().await.unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["object"], "chat.completion");
+    assert!(body["usage"]["prompt_tokens"].is_number());
+    assert!(body["usage"]["completion_tokens"].is_number());
+}
+```
+
+### TC-08：Embeddings 端点代理成功
+
+```rust
+/// 验证：/v1/embeddings 请求被正确路由并代理，返回 embeddings 数组
+#[tokio::test]
+async fn test_embeddings_proxy() {
+    let app = TestApp::start().await;
+    // etcd 中已注册支持 embeddings 的 model "text-embedding-3-small"
+    // mock upstream 返回标准 embeddings 响应
+
+    let resp = app.client
+        .post(format!("{}/v1/embeddings", app.base_url))
+        .bearer_auth("sk-valid-key")
+        .json(&json!({
+            "model": "text-embedding-3-small",
+            "input": "Hello world"
+        }))
+        .send().await.unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["object"], "list");
+    assert!(body["data"][0]["embedding"].is_array());
+    assert!(body["data"][0]["embedding"].as_array().unwrap().len() > 0);
+}
+```
+
+### TC-09：Chat 流式代理 — SSE 事件格式正确
+
+```rust
+/// 验证：stream=true 时，gateway 输出合法的 OpenAI SSE 格式
+///      包含 data: {...} 行，以 data: [DONE] 结束
+#[tokio::test]
+async fn test_chat_completion_proxy_streaming() {
+    let app = TestApp::start().await;
+    // mock upstream 返回 SSE 流：多个 delta chunk + [DONE]
+
+    let resp = app.client
+        .post(format!("{}/v1/chat/completions", app.base_url))
+        .bearer_auth("sk-valid-key")
+        .json(&json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Count 1 to 3"}],
+            "stream": true
+        }))
+        .send().await.unwrap();
+
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "text/event-stream"
+    );
+
+    let text = resp.text().await.unwrap();
+    // 至少有一个 data: {...} 行
+    assert!(text.contains("data: {"));
+    // 最后以 data: [DONE] 结束
+    assert!(text.trim_end().ends_with("data: [DONE]"));
+
+    // 解析所有非 [DONE] 的 data 行，验证 JSON 结构合法
+    for line in text.lines() {
+        if let Some(json_str) = line.strip_prefix("data: ") {
+            if json_str == "[DONE]" { continue; }
+            let chunk: serde_json::Value = serde_json::from_str(json_str).unwrap();
+            assert_eq!(chunk["object"], "chat.completion.chunk");
+        }
+    }
+}
+```
+
+### TC-10：流式结束后 usage 被记录
+
+```rust
+/// 验证：流式请求完成后，PostCall 阶段将 usage 写入 Redis 计数器
+///      通过查询 Redis key 确认 token 消耗已扣除
+#[tokio::test]
+async fn test_streaming_usage_tracked() {
+    let app = TestApp::start().await;
+    // mock upstream 流中包含 StreamEvent::Usage (input=10, output=20)
+
+    let resp = app.client
+        .post(format!("{}/v1/chat/completions", app.base_url))
+        .bearer_auth("sk-valid-key")
+        .json(&json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // 消费完整个流
+    let _ = resp.text().await.unwrap();
+
+    // 等待 PostCall 异步任务完成
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // 查询 Redis，验证 token 计数已扣除
+    let tpm_used: i64 = app.redis.get("rl:tpm:key:key-001:gpt-4o-mini:*").await;
+    assert!(tpm_used >= 30, "expected at least 30 tokens (10 in + 20 out)");
+}
+```
+
+### TC-11：按 key 路由到指定 provider
+
+```rust
+/// 验证：model 配置关联到特定 provider，请求被路由到正确的上游 URL
+#[tokio::test]
+async fn test_model_routing_by_provider() {
+    let app = TestApp::start_with_two_providers().await;
+    // provider-a mock: https://mock-a.local
+    // provider-b mock: https://mock-b.local
+    // model "model-a" → provider-a；model "model-b" → provider-b
+
+    app.chat_to_model("sk-valid-key", "model-a").await;
+    app.mock_provider_a.assert_hit_count(1).await;
+    app.mock_provider_b.assert_hit_count(0).await;
+
+    app.chat_to_model("sk-valid-key", "model-b").await;
+    app.mock_provider_a.assert_hit_count(1).await;  // 不变
+    app.mock_provider_b.assert_hit_count(1).await;
+}
+```
+
+### TC-12：上游返回 5xx → gateway 返回 502
+
+```rust
+/// 验证：上游返回 500，gateway 归一化为 502 并返回 OpenAI 兼容错误体
+#[tokio::test]
+async fn test_upstream_5xx_returns_502() {
+    let app = TestApp::start_with_failing_upstream(500).await;
+
+    let resp = app.client
+        .post(format!("{}/v1/chat/completions", app.base_url))
+        .bearer_auth("sk-valid-key")
+        .json(&json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send().await.unwrap();
+
+    assert_eq!(resp.status(), 502);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "upstream_error");
+    // 不暴露上游内部错误细节
+    assert!(body["error"].get("upstream_status").is_none());
+}
+```
+
+### TC-13：spend 超限后请求被拒绝
+
+```rust
+/// 验证：key 的 max_budget 已耗尽，新请求返回 429（budget exceeded）
+#[tokio::test]
+async fn test_spend_limit_blocks_after_exceeded() {
+    let app = TestApp::start_with_config(ApiKeyConfig {
+        key: "sk-budget-key",
+        max_budget_usd: Some(0.000001),  // 极小预算，立刻耗尽
+        ..Default::default()
+    }).await;
+
+    // 第一次请求（usage 足以耗尽预算）
+    let _ = app.chat("sk-budget-key", "gpt-4o-mini").await;
+
+    // 等待 PostCall 异步记账完成
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // 第二次请求应被预算检查拒绝
+    let resp = app.chat("sk-budget-key", "gpt-4o-mini").await;
+    assert_eq!(resp.status(), 429);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "budget_exceeded");
+}
+```
+
+### TC-14：热更新 rate_limit 后立即生效
+
+```rust
+/// 验证：通过 etcd 写入新的 rate_limit 配置，热加载后新限制立即生效
+#[tokio::test]
+async fn test_hot_reload_rate_limit_change() {
+    let app = TestApp::start_with_config(ApiKeyConfig {
+        key: "sk-reload-key",
+        rate_limit: Some(InlineRateLimit { rpm: 100, ..Default::default() }),
+        ..Default::default()
+    }).await;
+
+    // 初始：rpm=100，请求应通过
+    let resp = app.chat("sk-reload-key", "gpt-4o-mini").await;
+    assert_eq!(resp.status(), 200);
+
+    // 通过 etcd 将 rpm 改为 0（锁定该 key）
+    app.etcd_client.put(
+        "/aisix/apikeys/key-reload",
+        r#"{"id":"key-reload","key":"sk-reload-key","rate_limit":{"rpm":0}}"#,
+    ).await.unwrap();
+
+    // 等待热加载完成（debounce ~500ms + 编译时间）
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    // 新配置生效：rpm=0，请求应被拒绝
+    let resp = app.chat("sk-reload-key", "gpt-4o-mini").await;
+    assert_eq!(resp.status(), 429);
+}
+```
+
+### TC-15：etcd 启动时不可用 — gateway 拒绝启动
+
+```rust
+/// 验证：etcd 不可用时，gateway 启动失败并退出（而非以空配置提供服务）
+#[tokio::test]
+async fn test_etcd_unavailable_at_startup_fails() {
+    // 不启动 etcd，直接尝试启动 gateway
+    let result = TestApp::start_without_etcd().await;
+
+    // 预期：启动失败，返回错误
+    assert!(result.is_err(), "gateway should fail to start without etcd");
+    // 不应以空配置提供任何服务（安全 fail-fast 原则）
+}
+```
+
+### TC-16：Redis 故障时请求放行（降级为无限流）
+
+```rust
+/// 验证：Redis 不可用时，限流检查降级（pass-through），请求仍被转发
+///      这是"可用性优先"策略：宁可放行，不因 Redis 故障拒绝所有请求
+#[tokio::test]
+async fn test_redis_failure_passthrough() {
+    let app = TestApp::start_with_redis_down().await;
+    // mock upstream 仍正常响应
+
+    let resp = app.client
+        .post(format!("{}/v1/chat/completions", app.base_url))
+        .bearer_auth("sk-valid-key")
+        .json(&json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}]
+        }))
+        .send().await.unwrap();
+
+    // Redis 故障时请求应被放行（返回 200），而非 500/429
+    assert_eq!(resp.status(), 200);
+}
+```
+
+### 错误响应格式规范
+
+所有错误响应统一为 OpenAI 兼容格式，HTTP 状态码与 `error.type` 的对应关系：
+
+| HTTP 状态码 | `error.type` | 触发场景 |
+|------------|-------------|---------|
+| 401 | `authentication_error` | API Key 无效或缺失 |
+| 403 | `permission_denied` | Key 无权访问该 model |
+| 429 | `rate_limit_error` | RPM/TPM/并发超限 |
+| 429 | `budget_exceeded` | spend 预算耗尽 |
+| 400 | `invalid_request_error` | 请求体格式错误 |
+| 502 | `upstream_error` | 上游 5xx 或连接失败 |
+| 504 | `timeout_error` | 上游超时 |
+| 500 | `internal_error` | gateway 内部错误 |
+
+```json
+{
+  "error": {
+    "message": "Rate limit exceeded: rpm limit 100 for key key-abc123",
+    "type": "rate_limit_error",
+    "code": "rate_limit_exceeded"
+  }
+}
+```
+
+### 超时参数参考
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `upstream.connect_timeout_ms` | 5000 | 建立 TCP 连接超时 |
+| `upstream.request_timeout_ms` | 60000 | 首字节超时（非流式） |
+| `upstream.stream_idle_timeout_ms` | 120000 | 流式传输中无数据超时 |
+| `upstream.guardrail_timeout_ms` | 3000 | Guardrail HTTP callback 超时 |
