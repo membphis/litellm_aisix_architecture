@@ -1592,28 +1592,33 @@ aisix/
 - OpenAI 兼容的请求/响应面
 - Providers: OpenAI, Azure OpenAI, Anthropic
 - Auth: **Virtual Key**（AI Gateway 只处理 Virtual Key；JWT / IP Filter 等外围认证由前置 API Gateway 负责）
-- 路由: simple-shuffle + least-busy
-- 首字节前 Fallback
+- 路由: 固定查找（model name → provider 直查，1:1 映射）
 - 限流: RPM/TPM/并发（Redis）
 - 缓存: 内存 + Redis
 - 可观测: tracing + Prometheus + OTEL
 - etcd 配置源 + 热加载
-- 基础 Spend 计费 + 响应头（cost/provider/cache hit）
+- 基础 Spend 追踪：记录请求 token 用量（input/output tokens）
+- 响应头：`x-aisix-provider`、`x-aisix-cache-hit`
 - **最小化 Admin HTTP API**：Provider / Model / Virtual Key 的 CRUD（内嵌于 aisix-gateway，无需独立部署），满足真实测试和早期使用
 
 **预计工期：4-6 周**
 
 ### Phase 2 — 生产基线
 构建优先:
-- Budget 层级（Global→Key→Customer；Team/Member 见第十五章 TODO）
+- **Model 多 Deployment 数据模型**：model group / deployments 设计（见第十五章 TODO #2），落地后支持：
+  - 路由策略：simple-shuffle / least-busy / weighted
+  - 首字节前 Fallback（backup deployment list）
+- Budget 层级（Global→Key→Customer；Team/Member 见第十五章 TODO #1）
 - Per-Model 限流
-- 健康检查 + Cooldown
+- Provider 健康检查 + Cooldown
+- `/health`（liveness）+ `/ready`（readiness）HTTP 健康检查端点（见第十五章 TODO #6）
+- **Spend 计费价格设计**（见第十五章 TODO #3）：定价表来源确定后，补全 cost 计算
+- 响应头增强：`x-aisix-cost`、`x-aisix-remaining-budget`
 - Latency-based / Usage-based 路由
 - Callback sinks（Langfuse, Datadog）
 - Request Mutation / Prompt Template
-- 响应头增强（cost/provider/cache hit/remaining）
 
-**预计工期：3-4 周**
+**预计工期：4-6 周**
 
 ### Phase 3 — 企业级
 构建优先:
@@ -2154,9 +2159,9 @@ async fn test_redis_failure_passthrough() {
 
 ### 2. Model 多 Deployment 路由 / Fallback
 
-**背景**：当前模型 1:1 映射一个 provider 配置，无法支持同一逻辑模型对应多个 deployment 的负载均衡或 fallback。
+**背景**：当前模型 1:1 映射一个 provider 配置，无法支持同一逻辑模型对应多个 deployment 的负载均衡或 fallback。**已分配至 Phase 2，Phase 2 动工前需完成以下设计。**
 
-**待设计**：
+**待设计**:
 - `ModelConfig` 中 `deployments: Vec<DeploymentConfig>` 字段设计
 - 路由策略枚举：round-robin、least-latency、weighted、priority-fallback
 - 跨 deployment 的健康检查与 cooldown 共享方式
@@ -2166,9 +2171,9 @@ async fn test_redis_failure_passthrough() {
 
 ### 3. Spend 计费价格数据来源
 
-**背景**：当前 `aisix-spend` crate 负责费用计算，但 token 单价数据来源未设计。
+**背景**：当前 `aisix-spend` crate 负责费用计算，但 token 单价数据来源未设计。Phase 1 仅记录 token 用量，cost 计算推迟到 Phase 2。**已分配至 Phase 2，Phase 2 动工前需完成以下设计。**
 
-**待设计**：
+**待设计**:
 - 价格数据存储位置：etcd 静态配置 vs 控制面 API 下发 vs 内置默认表
 - 价格更新机制：Provider 调价时如何热更新
 - 自定义计费（企业自定义溢价/折扣）的配置格式
@@ -2200,9 +2205,9 @@ async fn test_redis_failure_passthrough() {
 
 ### 6. 健康检查端点（/health、/ready）
 
-**背景**：Phase 1 的 aisix-server 在代码注释中提及 health/metrics endpoints，但 Phase 1 交付列表中未显式列出，也无专项设计。Kubernetes liveness/readiness probe 和负载均衡器的接入依赖这两个端点。
+**背景**：Phase 1 的 aisix-server 在代码注释中提及 health/metrics endpoints，但 Phase 1 交付列表中未显式列出，也无专项设计。Kubernetes liveness/readiness probe 和负载均衡器的接入依赖这两个端点。**已分配至 Phase 2，Phase 2 动工前需完成以下设计。**
 
-**待设计**：
+**待设计**:
 - `/health`（liveness）：检查 gateway 进程本身是否存活（返回 200 即可）
 - `/ready`（readiness）：检查 gateway 是否已完成启动（etcd 快照已加载、Redis 可达）
 - readiness 检查的依赖范围：etcd 连接、Redis 连接、初始快照编译是否纳入
