@@ -1346,20 +1346,20 @@ apikeys[0].allowed_models[1]:
 ```
 aisix/
 ├── Cargo.toml                    # workspace root
-├── bin/
+├── bin/                          # ── entry (L4) ──
 │   └── aisix-gateway/                   # binary entry point
 │       └── main.rs
 └── crates/
     │
-    │  ── foundation ──
+    │  ── foundation (L0) ──
     ├── aisix-types/              # shared types: CanonicalRequest/Response, Usage, IDs, Error
+    │
+    │  ── core infra (L1) ──
     ├── aisix-core/               # core abstractions: RequestContext, GatewayState, pipeline orchestration
     ├── aisix-config/             # etcd watch + compiled snapshot + validation + hot-reload
-    │
-    │  ── storage ──
     ├── aisix-storage/            # Redis (counters/cache) + secret resolution (PG owned by control plane)
     │
-    │  ── domain modules ──
+    │  ── domain modules (L2) ──
     ├── aisix-auth/               # Virtual Key, JWT, IP Filter
     ├── aisix-policy/             # hierarchical policy resolution, model/label access control, param mutation
     ├── aisix-router/             # model resolution, fallback, cooldown
@@ -1370,7 +1370,7 @@ aisix/
     ├── aisix-spend/              # pricing, cost calculation, async batch billing, budget reconciliation
     ├── aisix-observability/      # tracing, Prometheus, OTEL, callback sink fanout
     │
-    │  ── orchestration ──
+    │  ── orchestration (L3) ──
     ├── aisix-runtime/            # runtime composition, background tasks, snapshot lifecycle, registry
     └── aisix-server/             # axum routing, request extraction, SSE response, health/metrics endpoints
 ```
@@ -1397,25 +1397,37 @@ aisix/
 
 ### 依赖关系图
 
-```
-aisix-types
-    ↑
-aisix-core ←── aisix-config
-    ↑               ↑
-    ├── aisix-auth   |
-    ├── aisix-policy |
-    ├── aisix-router |
-    ├── aisix-ratelimit
-    ├── aisix-cache
-    ├── aisix-providers
-    ├── aisix-guardrail
-    ├── aisix-spend
-    └── aisix-observability
+> 矢量图见 `aisix-crate-deps.drawio`。箭头方向：A → B 表示 A 依赖 B（向下指向被依赖层）。
 
-aisix-storage → aisix-types + aisix-core
-aisix-runtime → all domain crates
-aisix-server → aisix-runtime + aisix-observability
-aisix-gateway → aisix-server
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ L4  Entry                                                               │
+│                                                                         │
+│   aisix-gateway → aisix-server                                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│ L3  Orchestration                                                       │
+│                                                                         │
+│   aisix-runtime → auth · policy · router · ratelimit                    │
+│                   cache · providers · guardrail · spend                 │
+│                   observability                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│ L2  Domain Modules                                                      │
+│                                                                         │
+│   aisix-auth · aisix-policy · aisix-router · aisix-ratelimit            │
+│   aisix-cache · aisix-providers · aisix-guardrail · aisix-spend         │
+│   aisix-observability                                                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│ L1  Core Infra                                                          │
+│                                                                         │
+│   aisix-config  ·  aisix-storage                                        │
+│       ↓                 ↓                                               │
+│       └─── aisix-core ──┘                                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│ L0  Foundation                                                          │
+│                                                                         │
+│   aisix-types                                                           │
+└─────────────────────────────────────────────────────────────────────────┘
+
 ```
 
 ---
