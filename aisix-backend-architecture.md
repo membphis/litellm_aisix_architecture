@@ -212,6 +212,8 @@ pub struct KeyMeta {
 ### Provider 编解码器
 
 ```rust
+// ===== aisix-providers =====
+
 /// 每个 LLM Provider 实现此 trait，负责请求/响应格式转换
 #[async_trait]
 pub trait ProviderCodec: Send + Sync + 'static {
@@ -1377,7 +1379,7 @@ aisix/
 
 | Crate | 职责 | 拥有的状态/数据 |
 |-------|------|----------------|
-| `aisix-types` | 共享类型定义 | CanonicalRequest/Response, TransportMode, StreamEvent, ProviderOutput, Usage, IDs, Error 枚举 |
+| `aisix-types` | 共享类型定义 | CanonicalRequest/Response, TransportMode, Usage, IDs, Error 枚举 |
 | `aisix-core` | 核心抽象 | RequestContext, GatewayState, 管线编排逻辑 |
 | `aisix-config` | 配置系统 | CompiledSnapshot, etcd watcher, 验证器 |
 | `aisix-storage` | Redis 计数器与缓存；密钥解析 | Redis repo, 密钥解析器（PG 不在数据面依赖中） |
@@ -1386,7 +1388,7 @@ aisix/
 | `aisix-router` | 路由 | RouteDecision, 策略实现, 健康状态 |
 | `aisix-ratelimit` | 限流 | RateDecision, 本地计数器 |
 | `aisix-cache` | 缓存 | CacheBackend 实现, key builder |
-| `aisix-providers` | Provider | 编解码器, 流式适配器, 错误映射 |
+| `aisix-providers` | Provider | 编解码器（`ProviderCodec` trait）, `ProviderOutput`（含 `EventStream`/`ByteStream`）, `StreamEvent`, 流式适配器, 错误映射 |
 | `aisix-guardrail` | 安全护栏 | HTTP callback 引擎, 超时控制 |
 | `aisix-spend` | 费用 | UsageEvent, 定价表, 批量管道 |
 | `aisix-observability` | 可观测 | Metrics, tracing spans, callback sink |
