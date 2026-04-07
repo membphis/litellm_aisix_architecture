@@ -244,14 +244,25 @@ pub enum ProviderOutput {
         body: Bytes,
         usage: Option<Usage>,
     },
-    Stream {
+    EventStream {
+        status: StatusCode,
+        headers: HeaderMap,
+        stream: Pin<Box<dyn Stream<Item = Result<StreamEvent, GatewayError>> + Send>>,
+        // 流的每个单元是有语义的 StreamEvent（Delta / Usage / Done）。
+        // codec 负责将上游各种格式（OpenAI SSE、Anthropic event/data、
+        // Gemini JSON lines、Bedrock binary eventstream）统一解析为 StreamEvent。
+        // stream_chunk 逐事件渲染成 OpenAI SSE 帧并转发给客户端。
+        // 遇到 StreamEvent::Usage 时将 token 累计值写入 ctx.usage。
+        // PostCall 从 ctx.usage 读取计费数据，而非从 ProviderOutput 读取。
+    },
+    ByteStream {
         status: StatusCode,
         headers: HeaderMap,
         stream: Pin<Box<dyn Stream<Item = Result<Bytes, GatewayError>> + Send>>,
-        // 注意：Stream 变体不携带 usage 字段。
-        // stream_chunk 阶段在迭代 StreamEvent 时，遇到 StreamEvent::Usage 事件
-        // 则将累计值写入 ctx.usage: Option<TokenUsage>。
-        // PostCall 阶段从 ctx.usage 读取计费数据，而非从 ProviderOutput 读取。
+        // 流的每个单元是无语义的原始字节（如 AudioSpeech 返回的 MP3/Opus 数据）。
+        // codec 不解析内容，直接将上游字节流透传出去。
+        // stream_chunk 直接转发字节给客户端，不经过 StreamEvent 解析。
+        // usage 在请求前已知（按字符数计算），不在流内累积。
     },
 }
 ```
@@ -417,32 +428,41 @@ Client Request
 [12. Upstream Call] ─── timeout control
   │                 ─── retryable / fallback before first byte
   │
-  ├── non-streaming branch ──────────────────────────────────────────┐
-  │    ▼                                                             │
-  │  [parse full response]                                           │
-  │    ▼                                                             │
-  │  [Post-Call Guardrails] ─── HTTP callback                        │
-  │    ▼                                                             │
-  │  [extract Usage/Cost]                                            │
-  │    ▼                                                             │
-  │  [cache write (optional)]                                        │
-  │    ▼                                                             │
-  │  [return JSON response]                                          │
-  │    ▼                                                             │
-  │  [async Spend/Logging] ─── emit UsageEvent to structlog + cb sink│
-  │                                                                  │
-  └── streaming branch ──────────────────────────────────────────────┐
-       ▼                                                             │
-      [Stream Transcoder] ─── upstream SSE → StreamEvent → OpenAI SSE│
-       ▼                    (unified parsing, all upstream formats)  │
-      [During-Stream Guardrails] ─── timeout-only HTTP callback      │
-        ▼                                                            │
-        [incremental Usage tracking] ─── on StreamEvent::Usage:      │
-               accumulate tokens → write ctx.usage                   │
-       ▼                                                             │
-      [client SSE stream]                                            │
-       ▼                                                             │
-      [stream end → async settle/log]                                │
+  ├── TransportMode::Json ────────────────────────────────────────────┐
+  │    ▼                                                              │
+  │  [ProviderOutput::Json: parse full response body]                 │
+  │    ▼                                                              │
+  │  [Post-Call Guardrails] ─── HTTP callback                         │
+  │    ▼                                                              │
+  │  [extract Usage/Cost]                                             │
+  │    ▼                                                              │
+  │  [cache write (optional)]                                         │
+  │    ▼                                                              │
+  │  [return JSON response]                                           │
+  │    ▼                                                              │
+  │  [async Spend/Logging] ─── emit UsageEvent to structlog + cb sink │
+  │                                                                   │
+  ├── TransportMode::SseStream ───────────────────────────────────────┐
+  │    ▼                                                              │
+  │  [ProviderOutput::EventStream: codec → StreamEvent stream]        │
+  │    ▼      (all upstream formats unified: SSE / JSON-lines /       │
+  │            Anthropic event/data / Bedrock binary eventstream)     │
+  │  [During-Stream Guardrails] ─── timeout-only HTTP callback        │
+  │    ▼                                                              │
+  │  [incremental Usage tracking] ─── on StreamEvent::Usage:          │
+  │       accumulate tokens → write ctx.usage                         │
+  │    ▼                                                              │
+  │  [render StreamEvent → OpenAI SSE → client]                       │
+  │    ▼                                                              │
+  │  [stream end → async settle/log]                                  │
+  │                                                                   │
+  └── TransportMode::BinaryStream ────────────────────────────────────┐
+       ▼                                                              │
+      [ProviderOutput::ByteStream: raw bytes, no parsing]             │
+       ▼                                                              │
+      [forward bytes directly to client]                              │
+       ▼                                                              │
+      [async Spend/Logging] ─── usage known before request (char count)│
 ```
 
 ---
@@ -506,7 +526,7 @@ Client Request
 | 9 | **RouteSelect** | 读取 CompiledSnapshot 的 upstream 列表，按策略（round-robin / weighted / failover）选择，纯内存计算 | 🔧 自定义调度逻辑 |
 | 10 | **PreUpstream** | 可变克隆请求体，注入 `system` message，替换模板变量，覆盖参数 | 🔧 自定义变换逻辑 |
 | 11 | **UpstreamHeaders** | 读取选定 provider 的 credential，拼装 `Authorization`、`x-api-key`、`api-version` 等头 | 🔧 自定义（per-provider 分支） |
-| 12 | **StreamChunk** | `hyper` body streaming + SSE 帧解析 + 非 OpenAI 格式转码 + `axum::response::Sse` 转发 | ⚠️ 技术挑战最高 |
+| 12 | **StreamChunk** | 按 `TransportMode` 分发三条路径：`Json`（完整响应代理）、`SseStream`（`EventStream` → `StreamEvent` 解析 + OpenAI SSE 渲染）、`BinaryStream`（`ByteStream` 原始字节透传）；其中 `SseStream` 路径含帧边界解析、多 Provider 格式转码、首字节前 fallback | ⚠️ 技术挑战最高（SseStream 路径） |
 | 13 | **PostCall** | tokio `spawn` 后台任务：写 Redis 用量、更新计费、写语义缓存、调 webhook | 🔧 后台任务（需注意不阻塞响应） |
 | 14 | **OnError** | 匹配自定义 `GatewayError` 枚举，转为 `axum::Json` 标准错误响应；可选触发 fallback 重试 | 🔧 自定义错误类型 + `IntoResponse` |
 
@@ -517,27 +537,34 @@ Client Request
 
 ---
 
-### 4.4 流式 vs 非流式
+### 4.4 三种传输模式
 
-**非流式：**
-- 读取完整上游响应体
-- 解析为 canonical response
-- 应用 post-call guardrails
-- 提取 usage/cost
-- 可选缓存
-- 返回 JSON
+由 `CanonicalRequest::transport_mode()` 决定，`stream_chunk` 按 `TransportMode` 分发到三条路径。
 
-**流式：**
-- **首字节前**可以重试/fallback
-- **首字节后**不再重试，该 provider 调用确定
-- 适配上游流为 OpenAI-style SSE
-- 增量更新 token/usage
+**TransportMode::Json（完整 JSON 响应）**
+- `ProviderOutput::Json`：读取完整上游响应体
+- 解析为 canonical response，应用 post-call guardrails
+- 提取 usage/cost，可选缓存，返回 JSON
+- 适用端点：Embeddings、Images、非流式 Chat/Responses
+
+**TransportMode::SseStream（SSE 事件流）**
+- `ProviderOutput::EventStream`：codec 将上游格式（OpenAI SSE / Anthropic event/data / Gemini JSON lines / Bedrock binary eventstream）统一解析为 `StreamEvent`
+- **首字节前**可以重试/fallback；**首字节后**不再重试，该 provider 调用确定
+- 逐事件渲染为 OpenAI SSE 输出给客户端
+- 遇到 `StreamEvent::Usage` 时增量累积 token 计数，写入 `ctx.usage`
 - 流结束时异步结算
+- 适用端点：流式 Chat/Responses（`stream: true`）
 
-**核心原则：统一解析转发**
-- 所有上游响应（无论 OpenAI 兼容格式还是 Anthropic/Gemini 格式）统一解析为内部 `StreamEvent`
+**TransportMode::BinaryStream（原始字节流）**
+- `ProviderOutput::ByteStream`：codec 不解析内容，直接透传上游字节流
+- `stream_chunk` 将字节直接转发给客户端，不经过 `StreamEvent` 解析
+- usage 在请求前已知（按字符数计算），流内不累积
+- 适用端点：AudioSpeech（返回 MP3/Opus/AAC 等音频数据）
+
+**核心原则：统一解析转发（SseStream 路径）**
+- 所有流式上游响应（无论 OpenAI 兼容格式还是 Anthropic/Gemini/Bedrock 格式）统一解析为内部 `StreamEvent`
 - 再渲染为 OpenAI SSE 输出给客户端
-- 这使 token 计数、guardrail、日志等后处理逻辑统一，无需维护"直通"和"转码"两条代码路径
+- 这使 token 计数、guardrail、日志等后处理逻辑统一，无需为每种上游格式维护独立的转发路径
 
 ---
 
@@ -1350,7 +1377,7 @@ aisix/
 
 | Crate | 职责 | 拥有的状态/数据 |
 |-------|------|----------------|
-| `aisix-types` | 共享类型定义 | CanonicalRequest/Response, Usage, IDs, Error 枚举 |
+| `aisix-types` | 共享类型定义 | CanonicalRequest/Response, TransportMode, StreamEvent, ProviderOutput, Usage, IDs, Error 枚举 |
 | `aisix-core` | 核心抽象 | RequestContext, GatewayState, 管线编排逻辑 |
 | `aisix-config` | 配置系统 | CompiledSnapshot, etcd watcher, 验证器 |
 | `aisix-storage` | Redis 计数器与缓存；密钥解析 | Redis repo, 密钥解析器（PG 不在数据面依赖中） |
