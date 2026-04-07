@@ -246,7 +246,6 @@ pub struct Usage {
 pub struct KeyMeta {
     // ── 身份标识（供各 stage 按 id 查快照）──────────
     pub key_id:      String,          // etcd 中 apikey 记录的 ID（如 "key-abc123"），用于查快照
-    pub team_id:     Option<String>,  // 查 team 层级策略
     pub user_id:     Option<String>,
     pub customer_id: Option<String>,  // 最终用户标识（x-litellm-end-user）
 
@@ -284,6 +283,25 @@ pub trait ProviderCodec: Send + Sync + 'static {
 
     /// 错误归一化
     fn normalize_error(&self, status: StatusCode, body: &[u8]) -> GatewayError;
+
+    /// 发送请求（默认实现）：build_request → 上游 HTTP 发送 → parse_response
+    /// 各 codec 通常无需覆写此方法；仅在需要自定义重试或特殊错误处理时才覆写。
+    async fn execute(
+        &self,
+        ctx: &RequestContext,
+        target: &ResolvedTarget,
+        client: &UpstreamClient,
+    ) -> Result<ProviderOutput, GatewayError> {
+        let req = self.build_request(ctx, target)?;
+        let raw_resp = client.send(req).await
+            .map_err(|e| GatewayError::upstream_io(e))?;
+        if !raw_resp.status().is_success() {
+            let (parts, body) = raw_resp.into_parts();
+            let bytes = collect_body(body).await.unwrap_or_default();
+            return Err(self.normalize_error(parts.status, &bytes));
+        }
+        self.parse_response(ctx, target, raw_resp).await
+    }
 }
 
 pub enum ProviderOutput {
@@ -439,10 +457,10 @@ Client Request
 [3. RequestContext Init] ─── request_id + trace span + RequestContext object
   │
   ▼
-[4. Authentication] ─── Virtual Key / JWT / IP Filter
+[4. Authentication] ─── Virtual Key（Bearer token）
   │
   ▼
-[5. Authorization] ─── resolve Key→Team→Member→Customer hierarchy, determine effective policy
+[5. Authorization] ─── resolve Key→Customer hierarchy, determine effective policy
   │                ─── allowed models, labels, params, limits
   │
   ▼
@@ -706,6 +724,20 @@ send request ──▶ upstream A
 
 挑战：需要精确区分"响应头/首字节已发"和"尚未发出任何字节"两个状态，并在 fallback 时重置内部状态（重新执行 RouteSelect）。这个状态判断在 async 流式代码中容易出 race condition。
 
+**难点 D：客户端断开时立即 cancel 上游请求**
+
+客户端中途断开连接（例如用户刷新浏览器），axum 的 SSE response body future 会被 drop/cancel。此时必须同时 cancel 上游 HTTP 请求，否则 gateway 会继续消耗上游 token 和并发槽位：
+
+```
+client disconnects
+  ↓ axum drops the SSE body future
+  ↓ tokio cancels the stream_chunk task
+  ↓ ConcurrencyGuard::drop() triggers → ZREM (并发槽释放)
+  ↓ hyper upstream request also dropped → TCP connection returned to pool or closed
+```
+
+挑战：整条流式 pipeline 必须是 cancel-safe——每个 `await` 点都可能被取消，中间状态不能泄漏（Redis ZADD 后 ZREM 不执行、上游连接不归还连接池）。实现方式：所有资源持有用 RAII guard 包装，而不是在 `finally` 块中手动清理。
+
 ---
 
 ### 4.6 Pipeline 执行模型
@@ -773,6 +805,7 @@ async fn chat_completions(
     route_select::resolve(&mut ctx, &state)?;
     upstream_headers::inject(&mut ctx, &state)?;
 
+    // stream_chunk::proxy 阻塞直到响应（含流）全部写入客户端连接，ctx.usage 已填充
     let resp = stream_chunk::proxy(&mut ctx, &state).await?;
 
     tokio::spawn(post_call::run(ctx, state));     // 异步：扣费 + 写日志，不阻塞响应
@@ -836,9 +869,14 @@ async fn run_pipeline(
     route_select::resolve(&mut ctx, &state)?;
     upstream_headers::inject(&mut ctx, &state)?;
 
+    // stream_chunk::proxy 语义（方案 A — 阻塞直到传输完成）：
+    //   - TransportMode::Json / BinaryStream：完整响应体发送完毕后返回，ctx.usage 已填充。
+    //   - TransportMode::SseStream：将全部 SSE 帧（含 data:[DONE]）写入客户端连接后返回，
+    //     ctx.usage 在流结束时由 StreamEvent::Usage 累积写入，proxy 返回时已可安全读取。
+    // 因此 post_call 可在 proxy 返回后立即 spawn，无需共享所有权或额外同步机制。
     let resp = stream_chunk::proxy(&mut ctx, &state).await?;
 
-    tokio::spawn(post_call::run(ctx, state));
+    tokio::spawn(post_call::run(ctx, state));   // 异步：扣费 + 写日志，不阻塞调用方
     Ok(resp)
 }
 ```
@@ -997,7 +1035,7 @@ Step 3 (full features)
 | **L1 热路径** | 进程内 `Arc<CompiledSnapshot>` | 路由索引、策略表、模板、正则、Provider 注册表 | 无锁读，ArcSwap 原子切换 |
 | **L2 分布式计数** | Redis | RPM/TPM 计数器、并发租约、冷却标记、实时花费 | Lua 脚本原子操作 |
 | **L3 共享缓存** | Redis / S3 / GCS | 响应缓存（非流式）、语义缓存向量 | 异步读写 |
-| **L4 持久真相** | PostgreSQL | 使用量账本、审计日志、预算定义、定价表 | 控制面持有，数据面不直接访问；数据面通过结构化日志输出 UsageEvent，由外部 log agent 采集后写入 |
+| **L4 持久真相** | PostgreSQL | 使用量账本、审计日志、预算定义、定价表 | **控制面持有，数据面不直接访问**；数据面通过结构化日志输出 UsageEvent，由外部 log agent（Vector/Fluentd 等）采集后写入 |
 
 ### 限流器两层模型
 
@@ -1047,9 +1085,25 @@ request start:
   ZREMRANGEBYSCORE rl:cc:{scope}:{id} 0 {now}   ← evict expired entries
   ZCARD rl:cc:{scope}:{id} > limit → reject
 
-request complete:
+request complete (正常结束 / 客户端断开 / 超时):
   ZREM rl:cc:{scope}:{id} {request_id}
 ```
+
+**客户端断开时的租约清理保证**：
+
+- 并发计数器通过 RAII guard（`ConcurrencyGuard`）持有，实现 `Drop` trait：
+  ```rust
+  impl Drop for ConcurrencyGuard {
+      fn drop(&mut self) {
+          // 无论正常结束、panic、客户端断开，均触发 ZREM
+          let _ = self.redis.zrem(&self.key, &self.request_id);
+      }
+  }
+  ```
+- `stream_chunk` future 被 cancel 时（客户端断开），tokio 会 drop 持有 guard 的 future，
+  触发 `Drop::drop`，保证 ZREM 执行（cancel-safe）。
+- 同时设置 `expires_at = now + max_request_timeout`，作为双重保险：
+  即使 gateway 崩溃未执行 Drop，过期条目也会在下次请求时被 `ZREMRANGEBYSCORE` 自动清理。
 
 ### Spend 追踪：异步管道
 
@@ -1074,13 +1128,13 @@ background batch processor
 
 ```
 Global Proxy Budget
-  └─ Team Budget (+ per-model RPM/TPM)
-       └─ Team Member Budget (max_budget_in_team)
-            └─ Virtual Key Budget (+ per-model budget)
-                 └─ Customer (end-user) Budget
+  └─ Virtual Key Budget (+ per-model budget)
+       └─ Customer (end-user) Budget
 ```
 
 每个层级独立检查，任一层级拒绝即返回 429。
+
+> **Team / Team Member 层级**：当前暂不引入（见第十五章 TODO）。待积累足够生产用户迭代后再评估是否需要。
 
 ---
 
@@ -1407,7 +1461,7 @@ aisix/
     ├── aisix-storage/            # Redis (counters/cache) + secret resolution (PG owned by control plane)
     │
     │  ── domain modules (L2) ──
-    ├── aisix-auth/               # Virtual Key, JWT, IP Filter
+    ├── aisix-auth/               # Virtual Key 认证（Bearer token 查快照）
     ├── aisix-policy/             # hierarchical policy resolution, model/label access control, param mutation
     ├── aisix-router/             # model resolution, fallback, cooldown
     ├── aisix-ratelimit/          # RPM/TPM/concurrency/budget checks, local shadow + Redis authoritative
@@ -1450,7 +1504,7 @@ aisix/
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ L4  Entry                                                               │
 │                                                                         │
-│   aisix-gateway → aisix-server                                          │
+│   aisix-gateway → aisix-server → aisix-runtime                                          │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ L3  Orchestration                                                       │
 │                                                                         │
@@ -1488,7 +1542,7 @@ aisix/
 | Async Runtime | `tokio` | 多线程运行时 |
 | 序列化 | `serde` + `serde_json` + `serde_yaml` | 配置/请求解析 |
 | etcd 客户端 | `etcd-client` | etcd v3 客户端, 支持 watch/lease/TXN |
-| PostgreSQL | `sqlx` | 编译时 SQL 检查, 异步 |
+
 | Redis | `redis` | 异步 + Lua 脚本 |
 | JWT | `jsonwebtoken` | JWT 认证 |
 | 限流 | `governor` | Token Bucket / GCRA (sliding window)，用于本地 shadow 限流器 |
@@ -1537,7 +1591,7 @@ aisix/
 - `/v1/chat/completions` + `/v1/embeddings`
 - OpenAI 兼容的请求/响应面
 - Providers: OpenAI, Azure OpenAI, Anthropic
-- Auth: Virtual Key + JWT + IP Filter
+- Auth: **Virtual Key**（AI Gateway 只处理 Virtual Key；JWT / IP Filter 等外围认证由前置 API Gateway 负责）
 - 路由: simple-shuffle + least-busy
 - 首字节前 Fallback
 - 限流: RPM/TPM/并发（Redis）
@@ -1545,12 +1599,13 @@ aisix/
 - 可观测: tracing + Prometheus + OTEL
 - etcd 配置源 + 热加载
 - 基础 Spend 计费 + 响应头（cost/provider/cache hit）
+- **最小化 Admin HTTP API**：Provider / Model / Virtual Key 的 CRUD（内嵌于 aisix-gateway，无需独立部署），满足真实测试和早期使用
 
 **预计工期：4-6 周**
 
 ### Phase 2 — 生产基线
 构建优先:
-- Budget 层级（Global→Team→Member→Key→Customer）
+- Budget 层级（Global→Key→Customer；Team/Member 见第十五章 TODO）
 - Per-Model 限流
 - 健康检查 + Cooldown
 - Latency-based / Usage-based 路由
@@ -2054,6 +2109,8 @@ async fn test_redis_failure_passthrough() {
 | 429 | `rate_limit_error` | RPM/TPM/并发超限 |
 | 429 | `budget_exceeded` | spend 预算耗尽 |
 | 400 | `invalid_request_error` | 请求体格式错误 |
+| 400 | `context_length_exceeded` | 输入 token 数超过模型上下文窗口限制 |
+| 400 | `content_filter_error` | 上游内容安全策略拦截（provider 返回内容过滤错误） |
 | 502 | `upstream_error` | 上游 5xx 或连接失败 |
 | 504 | `timeout_error` | 上游超时 |
 | 500 | `internal_error` | gateway 内部错误 |
@@ -2076,3 +2133,78 @@ async fn test_redis_failure_passthrough() {
 | `upstream.request_timeout_ms` | 60000 | 首字节超时（非流式） |
 | `upstream.stream_idle_timeout_ms` | 120000 | 流式传输中无数据超时 |
 | `upstream.guardrail_timeout_ms` | 3000 | Guardrail HTTP callback 超时 |
+
+---
+
+## 十五、Future TODO（暂不设计，留待后续迭代）
+
+以下功能点经评估暂不纳入当前设计，但已在相关章节有所引用。待积累足够生产经验后，逐步补充详细设计。
+
+### 1. Team / Team Member 预算层级
+
+**背景**：当前预算层级为 `Global → Key → Customer`。Team/TeamMember 组织层级存在于 LiteLLM 设计中，但 AISIX MVP 阶段无需引入。
+
+**待设计**：
+- etcd 数据模型中 Team 实体的结构（team_id、成员列表、预算字段）
+- `KeyMeta` 添加 `team_id` 字段后的策略合并逻辑
+- `rl:budget:team:{id}` Redis key 的计费聚合方式
+- Phase 2 中五层层级（Global → Team → Member → Key → Customer）的优先级规则
+
+---
+
+### 2. Model 多 Deployment 路由 / Fallback
+
+**背景**：当前模型 1:1 映射一个 provider 配置，无法支持同一逻辑模型对应多个 deployment 的负载均衡或 fallback。
+
+**待设计**：
+- `ModelConfig` 中 `deployments: Vec<DeploymentConfig>` 字段设计
+- 路由策略枚举：round-robin、least-latency、weighted、priority-fallback
+- 跨 deployment 的健康检查与 cooldown 共享方式
+- etcd 中 model group 数据模型（逻辑模型名 → deployment 列表）
+
+---
+
+### 3. Spend 计费价格数据来源
+
+**背景**：当前 `aisix-spend` crate 负责费用计算，但 token 单价数据来源未设计。
+
+**待设计**：
+- 价格数据存储位置：etcd 静态配置 vs 控制面 API 下发 vs 内置默认表
+- 价格更新机制：Provider 调价时如何热更新
+- 自定义计费（企业自定义溢价/折扣）的配置格式
+- 货币单位与精度处理（微美元、整数 vs 浮点）
+
+---
+
+### 4. API Key 安全存储
+
+**背景**：MVP 阶段 Virtual Key 明文存储在 etcd 中，以 Bearer token 作为 HashMap key 直接查询。
+
+**待设计**：
+- Hash 存储方案：BLAKE3/SHA256 对 Key 哈希后存储，查询时对输入 hash 后再比对
+- 密钥后端集成：AWS KMS / HashiCorp Vault / Azure Key Vault（Phase 3）
+- Key rotation 流程：新老 Key 并行有效期、轮换通知
+
+---
+
+### 5. 超时参数配置归属
+
+**背景**：第十四章超时参数表列出了四个超时配置，但未明确其在 etcd 数据模型中的归属层级。
+
+**待设计**：
+- 超时参数是全局配置、Provider 级配置还是 Key 级配置
+- 各层级覆盖优先级（Key 级 > Provider 级 > 全局默认）
+- 与 etcd `GlobalConfig` / `ProviderConfig` / `KeyMeta` 结构体的绑定关系
+
+---
+
+### 6. 健康检查端点（/health、/ready）
+
+**背景**：Phase 1 的 aisix-server 在代码注释中提及 health/metrics endpoints，但 Phase 1 交付列表中未显式列出，也无专项设计。Kubernetes liveness/readiness probe 和负载均衡器的接入依赖这两个端点。
+
+**待设计**：
+- `/health`（liveness）：检查 gateway 进程本身是否存活（返回 200 即可）
+- `/ready`（readiness）：检查 gateway 是否已完成启动（etcd 快照已加载、Redis 可达）
+- readiness 检查的依赖范围：etcd 连接、Redis 连接、初始快照编译是否纳入
+- 探针失败时的 HTTP 状态码（503）及响应体格式
+- 是否与 `/metrics`（Prometheus）共用端口或单独绑定
