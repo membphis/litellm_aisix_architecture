@@ -154,6 +154,29 @@ pub enum CanonicalRequest {
     Mcp(McpRequest),
 }
 
+/// 客户端期待的响应传输方式。
+/// 由 Operation + stream 字段决定，与上游 Provider 无关。
+/// 定义在 aisix-types 中，作为 CanonicalRequest 的内置固定能力。
+pub enum TransportMode {
+    SseStream,      // SSE 帧流式（Chat/Responses + stream:true）
+    Json,           // 完整 JSON 响应
+    BinaryStream,   // 二进制流（如 AudioSpeech 返回音频数据）
+}
+
+impl CanonicalRequest {
+    /// 根据端点类型和请求参数，确定客户端期待的传输方式。
+    /// stream_chunk 模块只关心此方法的返回值，不感知 Operation。
+    /// 新增端点时只需在此方法中添加一行，stream_chunk 本身无需改动。
+    fn transport_mode(&self) -> TransportMode {
+        match self {
+            Self::Chat(r) if r.stream => TransportMode::SseStream,
+            Self::Responses(r) if r.stream => TransportMode::SseStream,
+            Self::Audio(AudioRequest::Speech(_)) => TransportMode::BinaryStream,
+            _ => TransportMode::Json,  // Embeddings, Images, AudioTranscription, 非流式 Chat/Responses
+        }
+    }
+}
+
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -680,6 +703,116 @@ async fn chat_completions(
     Ok(resp)
 }
 ```
+
+#### 多端点 Pipeline 复用模型
+
+`Operation` 枚举定义了 8 种 API 类型，按 pipeline 复用度可分为 4 组：
+
+| 组别 | API | 核心特征 | Pipeline 复用度 |
+|------|-----|---------|----------------|
+| **A. 流式 JSON (SSE)** | `ChatCompletions`, `Responses` | 有流式/非流式两条路径，需要 SSE 编解码、首字节前 fallback | ~90% |
+| **B. 纯 JSON 请求-响应** | `Embeddings`, `Images` | 永远非流式，不需要 SSE 转码 | ~70% |
+| **C. 二进制/多媒体** | `AudioTranscription`, `AudioSpeech` | 请求可能是 multipart 或响应是二进制流（非 SSE） | ~55% |
+| **D. 长连接/特殊协议** | `RealtimeSession`, `McpCall` | WebSocket 或自定义协议，脱离 HTTP request-response 模型 | ~20-30% |
+
+**核心结论**：A 组和 B 组可以共享同一个 `run_pipeline()` 通用函数。
+
+##### 各阶段复用明细
+
+以 `chat_completions` 为基准，逐阶段对比其余 API 的复用情况：
+
+| Pipeline 阶段 | ChatCompletions | Responses | Embeddings | Images | AudioTranscription | AudioSpeech | RealtimeSession | McpCall |
+|---|---|---|---|---|---|---|---|---|
+| Decode | JSON | JSON | JSON | JSON/Multipart | **Multipart** | JSON | **WebSocket** | HTTP |
+| Authentication | ✅ Extractor | ✅ 同左 | ✅ 同左 | ✅ 同左 | ✅ 同左 | ✅ 同左 | ⚠️ WS 握手 | ⚠️ 不同 |
+| Authorization | ✅ | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 |
+| RateLimit | ✅ | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 并发租约 | ✅ 同 |
+| PreCall Guardrail | ✅ | ✅ 同 | ✅ no-op | ⚠️ 可选 | ❌ 不适用 | ❌ 不适用 | ❌ 不适用 | ❌ 不适用 |
+| Cache Lookup | ✅ | ✅ 同 | ⚠️ 可选 | ⚠️ 可选 | ❌ | ❌ | ❌ | ❌ |
+| PreUpstream | ✅ | ✅ 同 | ❌ no-op | ❌ no-op | ❌ no-op | ❌ no-op | ❌ | ❌ |
+| RouteSelect | ✅ | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 |
+| UpstreamHeaders | ✅ | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 |
+| StreamChunk | ✅ SSE+非流 | ✅ SSE+非流 | ✅ **仅非流** | ✅ **仅非流** | ✅ **仅非流** | ⚠️ **二进制流** | ❌ 不适用 | ⚠️ 独立 |
+| PostCall | ✅ | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ 同 | ✅ | ✅ 同 |
+
+图例：✅ = 完全复用 ｜ ⚠️ = 部分复用/需适配 ｜ ❌ = 不适用
+
+##### 通用 `run_pipeline` 函数
+
+A 组（Chat + Responses）和 B 组（Embeddings + Images）共享同一个 pipeline 执行函数，差异通过 `CanonicalRequest` 枚举和 `ProviderCodec` trait 的多态消化：
+
+```rust
+async fn run_pipeline(
+    state: AppState,
+    key_meta: KeyMeta,
+    request: CanonicalRequest,
+) -> Result<Response, GatewayError> {
+    let mut ctx = RequestContext::new(request, key_meta);
+
+    authorization::check(&ctx, &state)?;
+    rate_limit::check(&ctx, &state).await?;
+    guardrail::pre_call(&ctx, &state).await?;
+    if let Some(resp) = cache::lookup(&ctx, &state).await? {
+        tokio::spawn(post_call::run(ctx, state));
+        return Ok(resp);
+    }
+    pre_upstream::apply(&mut ctx, &state)?;
+    route_select::resolve(&mut ctx, &state)?;
+    upstream_headers::inject(&mut ctx, &state)?;
+
+    let resp = stream_chunk::proxy(&mut ctx, &state).await?;
+
+    tokio::spawn(post_call::run(ctx, state));
+    Ok(resp)
+}
+```
+
+各 handler 只需负责 Decode + 调用 `run_pipeline`：
+
+```rust
+async fn chat_completions(
+    State(state): State<AppState>,
+    AuthenticatedKey(key_meta): AuthenticatedKey,
+    Json(body): Json<ChatCompletionRequest>,
+) -> Result<Response, GatewayError> {
+    run_pipeline(state, key_meta, CanonicalRequest::Chat(body)).await
+}
+
+async fn embeddings(
+    State(state): State<AppState>,
+    AuthenticatedKey(key_meta): AuthenticatedKey,
+    Json(body): Json<EmbeddingsRequest>,
+) -> Result<Response, GatewayError> {
+    run_pipeline(state, key_meta, CanonicalRequest::Embeddings(body)).await
+}
+```
+
+##### StreamChunk 内部分发
+
+`stream_chunk::proxy` **只关心传输方式，不感知 Operation**。由 `CanonicalRequest::transport_mode()` 决定走哪条转发路径——这是 `CanonicalRequest` 的内置固定能力，与 Provider 无关：
+
+```rust
+// stream_chunk::proxy — 按 TransportMode 分发，不出现任何 Operation 分支
+pub async fn proxy(ctx: &mut RequestContext, state: &AppState) -> Result<Response, GatewayError> {
+    match ctx.request.transport_mode() {
+        TransportMode::SseStream    => proxy_sse_stream(ctx, state).await,
+        TransportMode::Json         => proxy_json_response(ctx, state).await,
+        TransportMode::BinaryStream => proxy_binary_stream(ctx, state).await,
+    }
+}
+```
+
+**职责边界**：
+
+- `CanonicalRequest::transport_mode()`（aisix-types）：回答"客户端期待以什么方式接收响应"，由 Operation + `stream` 字段决定，Provider 无关。新增端点时只需在此方法中添加一行。
+- `ProviderCodec`（aisix-providers）：各 Provider 独立实现，负责格式转换（build_request / parse_response），不感知 transport_mode。
+- `stream_chunk`（pipeline）：只依赖 `TransportMode` 枚举做转发分发，三个变体各自独立实现，新增传输方式时才需改动。
+
+##### C/D 组的处理策略
+
+**C 组（Audio）**：前半段 pipeline（Auth → RateLimit → RouteSelect）通过 `run_pipeline` 复用，仅 Decode 阶段（multipart 解析）和 StreamChunk（二进制流）需要独立实现。
+
+**D 组（Realtime + MCP）**：本质上是不同的协议，建议独立的 handler 代码路径，仅复用基础模块（Authentication Extractor、RouteSelect、RateLimit 的概念和实现），不走 `run_pipeline`。
 
 #### 代码组织建议
 
