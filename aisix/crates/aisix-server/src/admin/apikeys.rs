@@ -16,6 +16,6 @@ pub async fn put_apikey(
 ) -> Result<Json<crate::admin::AdminWriteResult>, GatewayError> {
     let admin = require_admin(&state, &headers)?;
     ensure_path_matches_body_id(&id, &apikey.id)?;
-    let result = admin.put_apikey(&id, apikey)?;
+    let result = admin.put_apikey(&id, apikey).await?;
     Ok(Json(result))
 }

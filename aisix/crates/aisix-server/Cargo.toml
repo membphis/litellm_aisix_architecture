@@ -25,6 +25,7 @@ tokio = { workspace = true, features = ["net"] }
 aisix-runtime = { path = "../aisix-runtime" }
 aisix-types = { path = "../aisix-types" }
 chrono.workspace = true
+etcd-client.workspace = true
 http-body-util = "0.1"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

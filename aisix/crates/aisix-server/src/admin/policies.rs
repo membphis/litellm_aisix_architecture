@@ -16,6 +16,6 @@ pub async fn put_policy(
 ) -> Result<Json<crate::admin::AdminWriteResult>, GatewayError> {
     let admin = require_admin(&state, &headers)?;
     ensure_path_matches_body_id(&id, &policy.id)?;
-    let result = admin.put_policy(&id, policy)?;
+    let result = admin.put_policy(&id, policy).await?;
     Ok(Json(result))
 }

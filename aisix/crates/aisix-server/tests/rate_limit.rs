@@ -25,6 +25,12 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use tokio::time::{Duration, timeout};
 
+mod support {
+    pub mod etcd {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../aisix-config/tests/support/etcd.rs"));
+    }
+}
+
 #[tokio::test]
 async fn inline_rpm_limit_triggers_429() {
     let capture = Arc::new(CapturedRequest::default());
@@ -49,8 +55,12 @@ async fn inline_rpm_limit_triggers_429() {
 async fn redis_failure_degrades_to_shadow_limiter() {
     let capture = Arc::new(CapturedRequest::default());
     let upstream = spawn_openai_mock(capture.clone()).await;
+    let harness = support::etcd::EtcdHarness::start()
+        .await
+        .expect("test etcd should start");
+
     with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let state = aisix_runtime::bootstrap::bootstrap(&broken_redis_config()).await.unwrap();
+        let state = aisix_runtime::bootstrap::bootstrap(&broken_redis_config(harness.config())).await.unwrap();
         let snapshot = snapshot_with_inline_rpm_limit(&upstream.base_url, 1);
         state.snapshot.store(std::sync::Arc::new(snapshot));
         let app = aisix_server::app::build_router(aisix_server::app::ServerState {
@@ -137,18 +147,14 @@ fn test_state(snapshot: CompiledSnapshot) -> aisix_server::app::ServerState {
     }
 }
 
-fn broken_redis_config() -> StartupConfig {
+fn broken_redis_config(etcd: EtcdConfig) -> StartupConfig {
     StartupConfig {
         server: ServerConfig {
             listen: "127.0.0.1:0".to_string(),
             metrics_listen: "127.0.0.1:0".to_string(),
             request_body_limit_mb: 1,
         },
-        etcd: EtcdConfig {
-            endpoints: vec![],
-            prefix: "/aisix".to_string(),
-            dial_timeout_ms: 100,
-        },
+        etcd,
         redis: RedisConfig {
             url: "redis://127.0.0.1:1".to_string(),
         },

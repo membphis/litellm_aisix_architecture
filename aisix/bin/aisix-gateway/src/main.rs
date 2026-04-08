@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
     aisix_observability::tracing_init::init(&config.log.level)?;
 
     let state = aisix_runtime::bootstrap::bootstrap(&config).await?;
-    let admin = aisix_server::admin::AdminState::from_startup_config(&config, state.snapshot.clone());
+    let admin = aisix_server::admin::AdminState::from_startup_config(&config).await?;
 
     aisix_server::app::serve(state, &config.server.listen, admin).await
 }
