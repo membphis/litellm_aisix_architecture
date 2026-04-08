@@ -1,11 +1,11 @@
-use std::sync::{Mutex, MutexGuard, OnceLock};
-
-use aisix_config::{
-    etcd_model::{ApiKeyConfig, ModelConfig, ProviderAuth, ProviderConfig, ProviderKind, RateLimitConfig},
-    snapshot::CompiledSnapshot,
-    watcher::initial_snapshot_handle,
+use std::{
+    sync::{Mutex, MutexGuard, OnceLock},
+    time::{Duration, Instant},
 };
-use aisix_core::AppState;
+
+use aisix_config::etcd_model::{
+    ApiKeyConfig, ModelConfig, ProviderAuth, ProviderConfig, ProviderKind, RateLimitConfig,
+};
 use aisix_providers::ProviderRegistry;
 use axum::{
     body::Body,
@@ -20,12 +20,19 @@ use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+mod support {
+    pub mod etcd {
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../aisix-config/tests/support/etcd.rs"));
+    }
+}
+
 #[tokio::test]
 async fn admin_can_create_provider_model_and_apikey_then_gateway_uses_reloaded_snapshot() {
     let upstream = spawn_openai_mock().await;
 
     with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(empty_snapshot(), true));
+        let fixture = LiveEtcdTestApp::start().await;
+        let app = fixture.router();
 
         let provider_response = app
             .clone()
@@ -78,10 +85,11 @@ async fn admin_can_create_provider_model_and_apikey_then_gateway_uses_reloaded_s
             .unwrap();
         assert_eq!(key_response.status(), StatusCode::OK);
 
-        let response = app
-            .oneshot(chat_request("live-token", "gpt-4o-mini"))
-            .await
-            .unwrap();
+        let response = poll_until_response(|| {
+            let app = app.clone();
+            async move { app.oneshot(chat_request("live-token", "gpt-4o-mini")).await.unwrap() }
+        })
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
             response
@@ -99,7 +107,9 @@ async fn admin_put_seeds_from_live_snapshot_and_advances_revision() {
     let upstream = spawn_openai_mock().await;
 
     with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(seed_snapshot(&upstream.base_url, 7), true));
+        let fixture = LiveEtcdTestApp::start_seeded(&upstream.base_url, None)
+            .await;
+        let app = fixture.router();
 
         let response = app
             .clone()
@@ -119,7 +129,7 @@ async fn admin_put_seeds_from_live_snapshot_and_advances_revision() {
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["revision"], 8);
+        assert_eq!(json["revision"].as_i64().unwrap(), fixture.seeded_revision() + 1);
 
         let old_key = app
             .clone()
@@ -128,10 +138,11 @@ async fn admin_put_seeds_from_live_snapshot_and_advances_revision() {
             .unwrap();
         assert_eq!(old_key.status(), StatusCode::OK);
 
-        let new_key = app
-            .oneshot(chat_request("new-token", "gpt-4o-mini"))
-            .await
-            .unwrap();
+        let new_key = poll_until_response(|| {
+            let app = app.clone();
+            async move { app.oneshot(chat_request("new-token", "gpt-4o-mini")).await.unwrap() }
+        })
+        .await;
         assert_eq!(new_key.status(), StatusCode::OK);
     })
     .await;
@@ -142,10 +153,8 @@ async fn unrelated_admin_put_preserves_seeded_apikey_limit_config() {
     let upstream = spawn_openai_mock().await;
 
     with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(
-            seed_snapshot_with_limited_key(&upstream.base_url, 7),
-            true,
-        ));
+        let fixture = LiveEtcdTestApp::start_seeded_with_limited_key(&upstream.base_url).await;
+        let app = fixture.router();
 
         let first = app
             .clone()
@@ -173,10 +182,11 @@ async fn unrelated_admin_put_preserves_seeded_apikey_limit_config() {
             .unwrap();
         assert_eq!(put.status(), StatusCode::OK);
 
-        let second = app
-            .oneshot(chat_request("limited-token", "gpt-4o-mini"))
-            .await
-            .unwrap();
+        let second = poll_until_status(|| {
+            let app = app.clone();
+            async move { app.oneshot(chat_request("limited-token", "gpt-4o-mini")).await.unwrap() }
+        }, StatusCode::TOO_MANY_REQUESTS)
+        .await;
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
 
         let body = second.into_body().collect().await.unwrap().to_bytes();
@@ -188,7 +198,8 @@ async fn unrelated_admin_put_preserves_seeded_apikey_limit_config() {
 
 #[tokio::test]
 async fn admin_requires_valid_x_admin_key() {
-    let app = aisix_server::app::build_router(test_state(empty_snapshot(), true));
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
 
     let missing = app
         .clone()
@@ -241,7 +252,8 @@ async fn admin_requires_valid_x_admin_key() {
 
 #[tokio::test]
 async fn admin_rejects_path_and_body_id_mismatch() {
-    let app = aisix_server::app::build_router(test_state(empty_snapshot(), true));
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
 
     let response = app
         .oneshot(admin_put_request(
@@ -270,13 +282,51 @@ async fn admin_rejects_path_and_body_id_mismatch() {
 }
 
 #[tokio::test]
+async fn admin_put_persists_provider_in_etcd_and_returns_write_revision() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app
+        .oneshot(admin_put_request(
+            "/admin/providers/openai",
+            json!(ProviderConfig {
+                id: "openai".to_string(),
+                kind: ProviderKind::OpenAi,
+                base_url: "https://api.openai.com".to_string(),
+                auth: ProviderAuth {
+                    secret_ref: "env:OPENAI_API_KEY".to_string(),
+                },
+                policy_id: None,
+                rate_limit: None,
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["id"], "openai");
+    assert_eq!(json["path"], "/aisix/providers/openai");
+    assert!(json["revision"].as_i64().unwrap() > 0);
+
+    let stored = fixture
+        .harness()
+        .get_json("/aisix/providers/openai")
+        .await
+        .expect("etcd read should succeed")
+        .expect("provider should be persisted");
+    assert_eq!(stored["id"], "openai");
+    assert_eq!(stored["base_url"], "https://api.openai.com");
+}
+
+#[tokio::test]
 async fn admin_update_reloads_key_rate_limit_without_poisoning_current_snapshot() {
     let upstream = spawn_openai_mock().await;
 
     with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(empty_snapshot(), true));
-
-        seed_valid_runtime_config(&app, &upstream.base_url, Some(1)).await;
+        let fixture = LiveEtcdTestApp::start_seeded(&upstream.base_url, Some(1)).await;
+        let app = fixture.router();
 
         let first = app
             .clone()
@@ -305,11 +355,11 @@ async fn admin_update_reloads_key_rate_limit_without_poisoning_current_snapshot(
             .unwrap();
         assert_eq!(update.status(), StatusCode::OK);
 
-        let second = app
-            .clone()
-            .oneshot(chat_request("live-token", "gpt-4o-mini"))
-            .await
-            .unwrap();
+        let second = poll_until_response(|| {
+            let app = app.clone();
+            async move { app.oneshot(chat_request("live-token", "gpt-4o-mini")).await.unwrap() }
+        })
+        .await;
         assert_eq!(second.status(), StatusCode::OK);
 
         let invalid_update = app
@@ -326,12 +376,13 @@ async fn admin_update_reloads_key_rate_limit_without_poisoning_current_snapshot(
             ))
             .await
             .unwrap();
-        assert_eq!(invalid_update.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(invalid_update.status(), StatusCode::OK);
 
-        let third = app
-            .oneshot(chat_request("live-token", "gpt-4o-mini"))
-            .await
-            .unwrap();
+        let third = poll_until_status(|| {
+            let app = app.clone();
+            async move { app.oneshot(chat_request("live-token", "gpt-4o-mini")).await.unwrap() }
+        }, StatusCode::TOO_MANY_REQUESTS)
+        .await;
         assert_eq!(third.status(), StatusCode::TOO_MANY_REQUESTS);
 
         let body = third.into_body().collect().await.unwrap().to_bytes();
@@ -341,12 +392,91 @@ async fn admin_update_reloads_key_rate_limit_without_poisoning_current_snapshot(
     .await;
 }
 
-async fn seed_valid_runtime_config(app: &axum::Router, base_url: &str, rpm: Option<u64>) {
-    let provider = app
-        .clone()
-        .oneshot(admin_put_request(
-            "/admin/providers/openai",
-            json!(ProviderConfig {
+struct LiveEtcdTestApp {
+    router: axum::Router,
+    _state: aisix_server::app::ServerState,
+    harness: support::etcd::EtcdHarness,
+    seeded_revision: i64,
+}
+
+impl LiveEtcdTestApp {
+    async fn start() -> Self {
+        let harness = support::etcd::EtcdHarness::start()
+            .await
+            .expect("test etcd should start");
+        Self::start_with_harness(harness, 0).await
+    }
+
+    async fn start_seeded(base_url: &str, rpm: Option<u64>) -> Self {
+        Self::start_with_seed(Some((base_url, rpm))).await
+    }
+
+    async fn start_seeded_with_limited_key(base_url: &str) -> Self {
+        let harness = support::etcd::EtcdHarness::start()
+            .await
+            .expect("test etcd should start");
+        let _seeded_revision = seed_valid_runtime_config_in_etcd(&harness, base_url, None).await;
+        let seeded_revision = seed_limited_runtime_key_in_etcd(&harness).await;
+
+        Self::start_with_harness(harness, seeded_revision).await
+    }
+
+    async fn start_with_seed(seed: Option<(&str, Option<u64>)>) -> Self {
+        let harness = support::etcd::EtcdHarness::start()
+            .await
+            .expect("test etcd should start");
+        let mut seeded_revision = 0;
+        if let Some((base_url, rpm)) = seed {
+            seeded_revision = seed_valid_runtime_config_in_etcd(&harness, base_url, rpm).await;
+        }
+        Self::start_with_harness(harness, seeded_revision).await
+    }
+
+    async fn start_with_harness(harness: support::etcd::EtcdHarness, seeded_revision: i64) -> Self {
+        let startup = test_startup_config(harness.config());
+        let app = aisix_runtime::bootstrap::bootstrap(&startup)
+            .await
+            .expect("runtime bootstrap should succeed");
+        let admin = aisix_server::admin::AdminState::from_startup_config(&startup)
+            .await
+            .expect("admin state should initialize")
+            .expect("admin state should be enabled");
+        let state = aisix_server::app::ServerState {
+            app,
+            providers: ProviderRegistry::default(),
+            admin: Some(admin),
+        };
+
+        Self {
+            router: aisix_server::app::build_router(state.clone()),
+            _state: state,
+            harness,
+            seeded_revision,
+        }
+    }
+
+    fn router(&self) -> axum::Router {
+        self.router.clone()
+    }
+
+    fn harness(&self) -> &support::etcd::EtcdHarness {
+        &self.harness
+    }
+
+    fn seeded_revision(&self) -> i64 {
+        self.seeded_revision
+    }
+}
+
+async fn seed_valid_runtime_config_in_etcd(
+    harness: &support::etcd::EtcdHarness,
+    base_url: &str,
+    rpm: Option<u64>,
+) -> i64 {
+    harness
+        .put_json(
+            "/aisix/providers/openai",
+            &json!(ProviderConfig {
                 id: "openai".to_string(),
                 kind: ProviderKind::OpenAi,
                 base_url: base_url.to_string(),
@@ -356,32 +486,26 @@ async fn seed_valid_runtime_config(app: &axum::Router, base_url: &str, rpm: Opti
                 policy_id: None,
                 rate_limit: None,
             }),
-        ))
+        )
         .await
-        .unwrap();
-    assert_eq!(provider.status(), StatusCode::OK);
-
-    let model = app
-        .clone()
-        .oneshot(admin_put_request(
-            "/admin/models/gpt-4o-mini",
-            json!(ModelConfig {
+        .expect("provider fixture should be written");
+    harness
+        .put_json(
+            "/aisix/models/gpt-4o-mini",
+            &json!(ModelConfig {
                 id: "gpt-4o-mini".to_string(),
                 provider_id: "openai".to_string(),
                 upstream_model: "gpt-4o-mini-2024-07-18".to_string(),
                 policy_id: None,
                 rate_limit: None,
             }),
-        ))
+        )
         .await
-        .unwrap();
-    assert_eq!(model.status(), StatusCode::OK);
-
-    let key = app
-        .clone()
-        .oneshot(admin_put_request(
-            "/admin/apikeys/vk_admin",
-            json!(ApiKeyConfig {
+        .expect("model fixture should be written");
+    harness
+        .put_json(
+            "/aisix/apikeys/vk_admin",
+            &json!(ApiKeyConfig {
                 id: "vk_admin".to_string(),
                 key: "live-token".to_string(),
                 allowed_models: vec!["gpt-4o-mini".to_string()],
@@ -392,125 +516,55 @@ async fn seed_valid_runtime_config(app: &axum::Router, base_url: &str, rpm: Opti
                     concurrency: None,
                 }),
             }),
-        ))
+        )
         .await
-        .unwrap();
-    assert_eq!(key.status(), StatusCode::OK);
+        .expect("apikey fixture should be written")
 }
 
-fn test_state(snapshot: CompiledSnapshot, ready: bool) -> aisix_server::app::ServerState {
-    let snapshot = initial_snapshot_handle(snapshot);
-    aisix_server::app::ServerState {
-        app: AppState::new(snapshot.clone(), ready),
-        providers: ProviderRegistry::default(),
-        admin: Some(aisix_server::admin::AdminState::new(
-            "/aisix".to_string(),
-            vec!["test-admin-key".to_string()],
-            snapshot,
-        )),
-    }
-}
-
-fn empty_snapshot() -> CompiledSnapshot {
-    CompiledSnapshot {
-        revision: 0,
-        keys_by_token: Default::default(),
-        apikeys_by_id: Default::default(),
-        providers_by_id: Default::default(),
-        models_by_name: Default::default(),
-        policies_by_id: Default::default(),
-        provider_limits: Default::default(),
-        model_limits: Default::default(),
-        key_limits: Default::default(),
-    }
-}
-
-fn seed_snapshot(base_url: &str, revision: i64) -> CompiledSnapshot {
-    let mut snapshot = empty_snapshot();
-    snapshot.revision = revision;
-    snapshot.keys_by_token.insert(
-        "live-token".to_string(),
-        aisix_types::entities::KeyMeta {
-            key_id: "vk_admin".to_string(),
-            user_id: None,
-            customer_id: None,
-            alias: None,
-            expires_at: None,
-            allowed_models: vec!["gpt-4o-mini".to_string()],
-        },
-    );
-    snapshot.apikeys_by_id.insert(
-        "vk_admin".to_string(),
-        ApiKeyConfig {
-            id: "vk_admin".to_string(),
-            key: "live-token".to_string(),
-            allowed_models: vec!["gpt-4o-mini".to_string()],
-            policy_id: None,
-            rate_limit: None,
-        },
-    );
-    snapshot.providers_by_id.insert(
-        "openai".to_string(),
-        ProviderConfig {
-            id: "openai".to_string(),
-            kind: ProviderKind::OpenAi,
-            base_url: base_url.to_string(),
-            auth: ProviderAuth {
-                secret_ref: "env:OPENAI_API_KEY".to_string(),
-            },
-            policy_id: None,
-            rate_limit: None,
-        },
-    );
-    snapshot.models_by_name.insert(
-        "gpt-4o-mini".to_string(),
-        ModelConfig {
-            id: "gpt-4o-mini".to_string(),
-            provider_id: "openai".to_string(),
-            upstream_model: "gpt-4o-mini-2024-07-18".to_string(),
-            policy_id: None,
-            rate_limit: None,
-        },
-    );
-    snapshot
-}
-
-fn seed_snapshot_with_limited_key(base_url: &str, revision: i64) -> CompiledSnapshot {
-    let mut snapshot = seed_snapshot(base_url, revision);
-    snapshot.keys_by_token.insert(
-        "limited-token".to_string(),
-        aisix_types::entities::KeyMeta {
-            key_id: "vk_limited".to_string(),
-            user_id: None,
-            customer_id: None,
-            alias: None,
-            expires_at: None,
-            allowed_models: vec!["gpt-4o-mini".to_string()],
-        },
-    );
-    snapshot.apikeys_by_id.insert(
-        "vk_limited".to_string(),
-        ApiKeyConfig {
-            id: "vk_limited".to_string(),
-            key: "limited-token".to_string(),
-            allowed_models: vec!["gpt-4o-mini".to_string()],
-            policy_id: None,
-            rate_limit: Some(RateLimitConfig {
-                rpm: Some(1),
-                tpm: None,
-                concurrency: None,
+async fn seed_limited_runtime_key_in_etcd(harness: &support::etcd::EtcdHarness) -> i64 {
+    harness
+        .put_json(
+            "/aisix/apikeys/vk_limited",
+            &json!(ApiKeyConfig {
+                id: "vk_limited".to_string(),
+                key: "limited-token".to_string(),
+                allowed_models: vec!["gpt-4o-mini".to_string()],
+                policy_id: None,
+                rate_limit: Some(RateLimitConfig {
+                    rpm: Some(1),
+                    tpm: None,
+                    concurrency: None,
+                }),
             }),
+        )
+        .await
+        .expect("limited apikey fixture should be written")
+}
+
+fn test_startup_config(etcd: aisix_config::startup::EtcdConfig) -> aisix_config::startup::StartupConfig {
+    aisix_config::startup::StartupConfig {
+        server: aisix_config::startup::ServerConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_listen: "127.0.0.1:0".to_string(),
+            request_body_limit_mb: 1,
         },
-    );
-    snapshot.key_limits.insert(
-        "vk_limited".to_string(),
-        aisix_config::snapshot::ResolvedLimits {
-            rpm: Some(1),
-            tpm: None,
-            concurrency: None,
+        etcd,
+        redis: aisix_config::startup::RedisConfig {
+            url: "redis://127.0.0.1:1".to_string(),
         },
-    );
-    snapshot
+        log: aisix_config::startup::LogConfig {
+            level: "info".to_string(),
+        },
+        runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
+        deployment: aisix_config::startup::DeploymentConfig {
+            admin: aisix_config::startup::AdminConfig {
+                enabled: true,
+                admin_keys: vec![aisix_config::startup::AdminKey {
+                    key: "test-admin-key".to_string(),
+                }],
+            },
+        },
+    }
 }
 
 fn admin_put_request(path: &str, body: Value) -> Request<Body> {
@@ -548,6 +602,40 @@ where
     let _restore = EnvVarGuard::set(name, value);
 
     f().await
+}
+
+async fn poll_until_response<F, Fut>(request: F) -> axum::response::Response
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = axum::response::Response>,
+{
+    poll_until_status(request, StatusCode::OK).await
+}
+
+async fn poll_until_status<F, Fut>(mut request: F, expected: StatusCode) -> axum::response::Response
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = axum::response::Response>,
+{
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let response = request().await;
+        if response.status() == expected {
+            return response;
+        }
+
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8_lossy(&body).into_owned();
+
+        if Instant::now() >= deadline {
+            panic!(
+                "response did not reach expected status {expected} before timeout; last status: {status}; last body: {body}"
+            );
+        }
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 struct EnvVarGuard {

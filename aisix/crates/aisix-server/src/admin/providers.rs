@@ -16,6 +16,6 @@ pub async fn put_provider(
 ) -> Result<Json<crate::admin::AdminWriteResult>, GatewayError> {
     let admin = require_admin(&state, &headers)?;
     ensure_path_matches_body_id(&id, &provider.id)?;
-    let result = admin.put_provider(&id, provider)?;
+    let result = admin.put_provider(&id, provider).await?;
     Ok(Json(result))
 }

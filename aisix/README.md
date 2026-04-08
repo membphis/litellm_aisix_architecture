@@ -22,6 +22,12 @@ export OPENAI_API_KEY="your-openai-key"
 cargo run --manifest-path Cargo.toml -p aisix-gateway -- config/aisix-gateway.example.yaml
 ```
 
+Gateway startup now depends on reachable etcd. The gateway loads its initial runtime snapshot from etcd under the configured prefix and fails to start if etcd cannot be reached.
+
+The embedded Admin API writes config into etcd under the configured prefix. Runtime changes are applied asynchronously by the background etcd watcher after the new full snapshot compiles successfully. A successful Admin response means etcd accepted the write; it does not guarantee the new config is already active.
+
+If a write stores invalid config that later fails compilation, the Admin request may still succeed because etcd accepted it, while the runtime keeps serving the previous compiled snapshot.
+
 4. Create a provider through the embedded Admin API:
 
 ```bash
@@ -79,7 +85,7 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/apikeys/demo-key \
   }'
 ```
 
-7. Call chat:
+7. Call chat after the watcher has reloaded the updated snapshot:
 
 ```bash
 curl -fsS http://127.0.0.1:4000/v1/chat/completions \
@@ -106,4 +112,4 @@ curl -fsS http://127.0.0.1:4000/v1/embeddings \
 
 ## Smoke Script
 
-Run `./scripts/smoke-phase1.sh` after the gateway is up. It checks health, writes one provider/model/apikey through the Admin API, and sends one chat request through the gateway.
+Run `./scripts/smoke-phase1.sh` after the gateway is up. It exercises the etcd-backed flow by checking health, writing one provider/model/apikey through the Admin API, and sending one chat request through the gateway. Admin success in that flow means the write reached etcd; the new config becomes active only after the background watcher reloads a successfully compiled snapshot.
