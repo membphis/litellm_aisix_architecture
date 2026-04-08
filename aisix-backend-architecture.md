@@ -438,6 +438,33 @@ pub trait CacheBackend: Send + Sync + 'static {
 }
 ```
 
+### Phase 1 缓存策略（内存缓存）
+
+**范围**：仅缓存非流式 chat completion 响应。Embeddings 缓存在 Phase 2 中实现。
+
+**缓存 key 生成**：
+
+```
+cache:{sha256(model_name + ":" + sha256(messages_json))}
+```
+
+- `model_name`：请求中的 `model` 字段值（如 `"gpt-4o-mini"`）
+- `messages_json`：将 `messages` 数组序列化为确定性 JSON（key 排序）后取 SHA-256
+
+**TTL**：全局固定值 `300s`（5 分钟），后续 Phase 支持按 model 配置。
+
+**存储后端**：进程内 `moka` 或 `DashMap`（LRU 淘汰，容量上限可配置，默认 10000 条）。
+
+**缓存命中行为**：
+- 命中时直接返回缓存的完整响应，**跳过上游调用、限流扣费、PostCall 计费**
+- 响应头中添加 `x-aisix-cache-hit: true`
+- 流式请求（`stream: true`）不参与缓存
+
+**Phase 演进**：
+- Phase 1：内存缓存（单节点，进程重启后丢失）
+- Phase 2：Redis 共享缓存（多节点共享，支持 embeddings）
+- Phase 3：语义缓存（Qdrant 向量相似度匹配）
+
 ---
 
 ## 四、请求处理管线
@@ -479,7 +506,7 @@ Client Request
   │                      ─── can block / transform / annotate request
   │
   ▼
-[9. Cache Lookup] ─── memory/Redis cache hit?
+[9. Cache Lookup] ─── memory cache hit? (skip rate limit + billing on hit)
   │
   ├── hit ──▶ [normalize response] ──▶ [return cached response]
   │
@@ -561,7 +588,7 @@ Client Request
 │  4. RateLimit       check remaining quota > 0; deduct actual  │
 │                     tokens after response                     │
 │  5. PreCall Guard   call external guardrail HTTP service (opt)│
-│  6. CacheLookup     semantic cache check, short-circuit on hit│
+│  6. CacheLookup     memory cache check, short-circuit on hit  │
 │  7. RouteSelect     pick upstream + load-balance + fallback   │
 │  8. PreUpstream     inject prompt + replace vars + override   │
 │  9. UpstreamHeaders assemble upstream auth headers, Host      │
@@ -589,12 +616,12 @@ Client Request
 | 5 | **Authorization** | 在 Handler 中读取 key 元数据与 CompiledSnapshot 里的 policy 规则，检查该 key 是否有权访问请求的 model/操作，纯内存匹配 | 🔧 自定义逻辑（无外部依赖） |
 | 6 | **RateLimit** | 两层检查：① local shadow（内存 governor/GCRA 计数器，快速拒绝明显超限，保护 Redis）→ ② Redis 原子操作检查剩余配额（> 0 则放行）；实际 input/output token 消耗在响应后扣除 | 🔧 需配合 Redis |
 | 7 | **PreCall Guardrail** | `reqwest` 调用外部 HTTP guardrail 服务，await 结果，失败则 early return | 🔧 标准 HTTP 客户端调用 |
-| 8 | **Cache Lookup** | `redis` crate GET，命中则直接构造响应返回，跳过后续阶段 | 🔧 自定义（逻辑简单） |
+| 8 | **Cache Lookup** | 进程内内存缓存（moka/DashMap）GET，命中则直接构造响应返回，跳过后续阶段；Phase 2 扩展为 Redis 共享缓存 | 🔧 自定义（逻辑简单） |
 | 9 | **RouteSelect** | 读取 CompiledSnapshot 的 upstream 列表，按策略（round-robin / weighted / failover）选择，纯内存计算 | 🔧 自定义调度逻辑 |
 | 10 | **PreUpstream** | 可变克隆请求体，注入 `system` message，替换模板变量，覆盖参数 | 🔧 自定义变换逻辑 |
 | 11 | **UpstreamHeaders** | 读取选定 provider 的 credential，拼装 `Authorization`、`x-api-key`、`api-version` 等头 | 🔧 自定义（per-provider 分支） |
 | 12 | **StreamChunk** | 按 `TransportMode` 分发三条路径：`Json`（完整响应代理）、`SseStream`（`EventStream` → `StreamEvent` 解析 + OpenAI SSE 渲染）、`BinaryStream`（`ByteStream` 原始字节透传）；其中 `SseStream` 路径含帧边界解析、多 Provider 格式转码、首字节前 fallback | ⚠️ 技术挑战最高（SseStream 路径） |
-| 13 | **PostCall** | tokio `spawn` 后台任务：写 Redis 用量、更新计费、写语义缓存、调 webhook | 🔧 后台任务（需注意不阻塞响应） |
+| 13 | **PostCall** | tokio `spawn` 后台任务：写 Redis 用量、更新计费、写缓存、调 webhook | 🔧 后台任务（需注意不阻塞响应） |
 | 14 | **OnError** | 匹配自定义 `GatewayError` 枚举，转为 `axum::Json` 标准错误响应；可选触发 fallback 重试 | 🔧 自定义错误类型 + `IntoResponse` |
 
 **图例**：
@@ -775,7 +802,7 @@ struct RequestContext {
 | Authorization | 检查 key 是否有权访问目标模型/路由 |
 | RateLimit | 按 key/team/user 查限速配置；有配置则查 Redis，无配置则 no-op |
 | PreCall Guardrail | 查 guardrail 规则；有配置则调外部 HTTP callback，无配置则 no-op |
-| Cache Lookup | 查缓存策略；有配置则查 Redis/语义缓存，命中则短路返回，无配置则 no-op |
+| Cache Lookup | 查缓存策略；有配置则查内存缓存，命中则短路返回（跳过限流扣费），无配置则 no-op |
 | PreUpstream | 查 prompt template 配置；有则渲染注入，无则 no-op |
 | RouteSelect | 按路由策略选上游 provider + model |
 | UpstreamHeaders | 拼装上游鉴权头（API key 等） |
@@ -1042,7 +1069,7 @@ Step 3 (full features)
 |------|---------|------|---------|
 | **L1 热路径** | 进程内 `Arc<CompiledSnapshot>` | 路由索引、策略表、模板、正则、Provider 注册表 | 无锁读，ArcSwap 原子切换 |
 | **L2 分布式计数** | Redis | RPM/TPM 计数器、并发租约、冷却标记、实时花费 | Lua 脚本原子操作 |
-| **L3 共享缓存** | Redis / S3 / GCS | 响应缓存（非流式）、语义缓存向量 | 异步读写 |
+| **L3 共享缓存** | Redis / S3 / GCS（Phase 1 为进程内内存） | 响应缓存（非流式）、语义缓存向量 | Phase 1：进程内内存缓存；Phase 2：Redis 共享缓存；Phase 3：语义缓存 |
 | **L4 持久真相** | PostgreSQL | 使用量账本、审计日志、预算定义、定价表 | **控制面持有，数据面不直接访问**；数据面通过结构化日志输出 UsageEvent，由外部 log agent（Vector/Fluentd 等）采集后写入 |
 
 ### 限流器两层模型
@@ -1480,14 +1507,14 @@ aisix/
     │  ── core infra (L1) ──
     ├── aisix-core/               # core abstractions: RequestContext, GatewayState, pipeline orchestration
     ├── aisix-config/             # etcd watch + compiled snapshot + validation + hot-reload
-    ├── aisix-storage/            # Redis (counters/cache) + secret resolution (PG owned by control plane)
+    ├── aisix-storage/            # Redis (counters) + secret resolution (PG owned by control plane)
     │
     │  ── domain modules (L2) ──
     ├── aisix-auth/               # Virtual Key 认证（Bearer token 查快照）
     ├── aisix-policy/             # hierarchical policy resolution, model/label access control, param mutation
     ├── aisix-router/             # model resolution, fallback, cooldown
     ├── aisix-ratelimit/          # RPM/TPM/concurrency/budget checks, local shadow + Redis authoritative
-    ├── aisix-cache/              # memory/Redis/Disk/S3/semantic cache backends
+    ├── aisix-cache/              # Phase 1: memory cache; Phase 2: Redis; Phase 3: semantic cache
     ├── aisix-providers/          # provider codecs, request/response transcoding, error normalization
     ├── aisix-guardrail/          # HTTP callback engine, pre/post-call guardrail
     ├── aisix-spend/              # pricing, cost calculation, async batch billing, budget reconciliation
@@ -1505,12 +1532,12 @@ aisix/
 | `aisix-types` | 共享类型定义 | CanonicalRequest/Response, TransportMode, Usage, IDs, Error 枚举 |
 | `aisix-core` | 核心抽象 | RequestContext, GatewayState |
 | `aisix-config` | 配置系统 | CompiledSnapshot, etcd watcher, 验证器 |
-| `aisix-storage` | Redis 计数器与缓存；密钥解析 | Redis repo, 密钥解析器（PG 不在数据面依赖中） |
+| `aisix-storage` | Redis 计数器（限流/并发）；密钥解析 | Redis repo, 密钥解析器（PG 不在数据面依赖中） |
 | `aisix-auth` | 认证 | Principal 解析, Key 校验 |
 | `aisix-policy` | 策略 | EffectivePolicy 合并, 访问决策 |
 | `aisix-router` | 路由 | RouteDecision, 策略实现, 健康状态 |
 | `aisix-ratelimit` | 限流 | RateDecision, 本地计数器 |
-| `aisix-cache` | 缓存 | CacheBackend 实现, key builder |
+| `aisix-cache` | 缓存 | CacheBackend 实现, key builder（Phase 1: 内存；Phase 2: Redis） |
 | `aisix-providers` | Provider | 编解码器（`ProviderCodec` trait）, `ProviderOutput`（含 `EventStream`/`ByteStream`）, `StreamEvent`, 流式适配器, 错误映射 |
 | `aisix-guardrail` | 安全护栏 | HTTP callback 引擎, 超时控制 |
 | `aisix-spend` | 费用 | UsageEvent, 定价表, 批量管道 |
@@ -1616,12 +1643,12 @@ aisix/
 - Auth: **Virtual Key**（AI Gateway 只处理 Virtual Key；JWT / IP Filter 等外围认证由前置 API Gateway 负责）
 - 路由: 固定查找（model name → provider 直查，1:1 映射）
 - 限流: RPM/TPM/并发（Redis）
-- 缓存: 内存 + Redis
+- 缓存: 内存缓存（仅非流式 chat completion；详见第五章缓存策略节）
 - 可观测: tracing + Prometheus + OTEL
 - etcd 配置源 + 热加载
 - 基础 Spend 追踪：记录请求 token 用量（input/output tokens）
 - 响应头：`x-aisix-provider`、`x-aisix-cache-hit`
-- **最小化 Admin HTTP API**：Provider / Model / Virtual Key 的 CRUD，默认内嵌于 aisix-gateway（开箱即用）。支持通过配置开关控制：开发/测试阶段启用内嵌 Admin API；生产环境可关闭 Admin API 或通过独立部署控制面（aisix-admin）来管理，以满足安全和隔离需求
+- **最小化 Admin HTTP API**：Provider / Model / Virtual Key 的 CRUD，默认内嵌于 aisix-gateway（开箱即用）。支持通过配置开关控制：开发/测试阶段启用内嵌 Admin API；生产环境可关闭 Admin API 或通过独立部署控制面（aisix-admin）来管理，以满足安全和隔离需求。Admin API 的具体 schema（路由、请求/响应格式、认证方式）参照 [api7/aisix](https://github.com/api7/aisix) 已有实现，本地代码位于 `git/aisix`（详见第十六章）
 - `/health`（liveness）+ `/ready`（readiness）HTTP 健康检查端点（复用 metrics 端口），确保 Kubernetes liveness/readiness probe 可用
 - etcd 运行时断连重连机制：watch 连接断开后自动重试重连，重连期间使用旧快照继续提供服务
 
@@ -1642,6 +1669,7 @@ aisix/
 - Latency-based / Usage-based 路由
 - Callback sinks（Langfuse, Datadog）
 - Request Mutation / Prompt Template
+- **Redis 响应缓存**：将 Phase 1 内存缓存扩展为 Redis 共享缓存，支持多节点部署；增加 embeddings 缓存
 
 **预计工期：4-6 周**
 
@@ -2235,11 +2263,141 @@ async fn test_redis_failure_degrade_to_local() {
 
 ### 6. 健康检查端点（/health、/ready）
 
-**背景**：Phase 1 的 aisix-server 在代码注释中提及 health/metrics endpoints，但 Phase 1 交付列表中未显式列出，也无专项设计。Kubernetes liveness/readiness probe 和负载均衡器的接入依赖这两个端点。**已分配至 Phase 2，Phase 2 动工前需完成以下设计。**
+**状态**：已在 Phase 1 中实现。以下为设计定义。
 
-**待设计**:
-- `/health`（liveness）：检查 gateway 进程本身是否存活（返回 200 即可）
-- `/ready`（readiness）：检查 gateway 是否已完成启动（etcd 快照已加载、Redis 可达）
-- readiness 检查的依赖范围：etcd 连接、Redis 连接、初始快照编译是否纳入
-- 探针失败时的 HTTP 状态码（503）及响应体格式
-- 是否与 `/metrics`（Prometheus）共用端口或单独绑定
+**端点定义**：
+
+| 端点 | 用途 | 成功状态码 | 失败状态码 | 检查内容 |
+|------|------|-----------|-----------|---------|
+| `GET /health` | Liveness probe | `200` | — | 进程存活即返回 200，不做任何依赖检查 |
+| `GET /ready` | Readiness probe | `200` | `503` | etcd 快照已加载 + Redis 连接可达 |
+
+**`/ready` 检查范围**：
+
+- `snapshot_loaded: bool` — 至少成功编译过一次 `CompiledSnapshot`（即 etcd 初始全量拉取 + 编译完成）
+- `redis_reachable: bool` — Redis `PING` 命令返回 `PONG`
+- 两个条件均满足时返回 `200`，任一不满足返回 `503`
+
+**响应体格式**（统一 JSON）：
+
+```json
+{
+  "status": "ok",
+  "checks": {
+    "snapshot_loaded": true,
+    "redis_reachable": true
+  }
+}
+```
+
+**部署建议**：复用 metrics 端口（与 Prometheus `/metrics` 共用同一 HTTP server），不单独绑定端口。Kubernetes 探针配置示例：
+
+```yaml
+livenessProbe:
+  httpGet: { path: /health, port: 9090 }
+readinessProbe:
+  httpGet: { path: /ready, port: 9090 }
+```
+
+---
+
+## 十六、Admin HTTP API 参考（基于 api7/aisix）
+
+> Phase 1 的 Admin HTTP API 直接参照 [api7/aisix](https://github.com/api7/aisix) 已有实现，本地代码位于 `git/aisix`。以下为关键设计摘要。
+
+### 路由定义
+
+基础路径：`/aisix/admin`
+
+| HTTP 方法 | 路径 | 说明 |
+|-----------|------|------|
+| **Models** | | |
+| `GET` | `/aisix/admin/models` | 列出所有 models |
+| `POST` | `/aisix/admin/models` | 创建 model（自动生成 UUID） |
+| `GET` | `/aisix/admin/models/{id}` | 按 ID 获取单个 model |
+| `PUT` | `/aisix/admin/models/{id}` | 创建或更新 model（upsert） |
+| `DELETE` | `/aisix/admin/models/{id}` | 删除 model |
+| **API Keys** | | |
+| `GET` | `/aisix/admin/apikeys` | 列出所有 API keys |
+| `POST` | `/aisix/admin/apikeys` | 创建 API key（自动生成 UUID） |
+| `GET` | `/aisix/admin/apikeys/{id}` | 按 ID 获取单个 API key |
+| `PUT` | `/aisix/admin/apikeys/{id}` | 创建或更新 API key（upsert） |
+| `DELETE` | `/aisix/admin/apikeys/{id}` | 删除 API key |
+
+### 认证方式
+
+Admin API 通过 axum middleware 保护，支持两种方式传递 admin key：
+
+1. `Authorization: Bearer <admin_key>` 头
+2. `x-api-key: <admin_key>` 自定义头
+
+Admin key 在 `config.yaml` 中静态配置：
+
+```yaml
+deployment:
+  admin:
+    admin_key:
+      - key: admin
+      - key: another-secret-key
+```
+
+若未配置 admin key，所有 admin 请求被拒绝（401）。
+
+### 请求/响应格式
+
+所有请求/响应体均为 `application/json`。
+
+**列表响应**（`GET` 集合端点）：
+
+```json
+{
+  "total": 2,
+  "list": [
+    {
+      "key": "/models/<uuid>",
+      "value": { "..." : "..." },
+      "created_index": 1,
+      "modified_index": 3
+    }
+  ]
+}
+```
+
+**单项响应**（`GET`/`POST`/`PUT` 单个端点）：
+
+```json
+{
+  "key": "/models/<uuid>",
+  "value": { "..." : "..." },
+  "created_index": null,
+  "modified_index": null
+}
+```
+
+**删除响应**：
+
+```json
+{
+  "deleted": 1,
+  "key": "/models/<uuid>"
+}
+```
+
+**错误响应**：
+
+```json
+{"error_msg": "descriptive message"}
+```
+
+| HTTP 状态码 | 触发场景 |
+|------------|---------|
+| `400` | 请求体格式错误 / schema 验证失败 / 重复名称 |
+| `401` | admin key 缺失或无效 |
+| `404` | 资源不存在 |
+| `500` | 内部错误 |
+
+`POST` 返回 `201 Created`；`PUT` 返回 `200 OK`（更新）或 `201 Created`（新建）。
+
+### AISIX 适配说明
+
+api7/aisix 的 Admin API 直接操作 etcd（无独立数据库层），与 AISIX 的 etcd 数据模型天然兼容。AISIX Phase 1 复用此 API schema，仅需按第七章 etcd 数据模型调整 entity body 结构（增加 `provider_id`、`policy_id`、`upstream_model` 等字段），并补充 Providers 和 Policies 的 CRUD 端点。
