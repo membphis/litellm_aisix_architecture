@@ -4,7 +4,8 @@ use std::{
 };
 
 use aisix_config::etcd_model::{
-    ApiKeyConfig, ModelConfig, ProviderAuth, ProviderConfig, ProviderKind, RateLimitConfig,
+    ApiKeyConfig, ModelConfig, PolicyConfig, ProviderAuth, ProviderConfig, ProviderKind,
+    RateLimitConfig,
 };
 use aisix_providers::ProviderRegistry;
 use axum::{
@@ -203,51 +204,125 @@ async fn admin_requires_valid_x_admin_key() {
 
     let missing = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("PUT")
-                .uri("/admin/providers/openai")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::to_vec(&json!({
-                        "id": "openai",
-                        "kind": "openai",
-                        "base_url": "http://127.0.0.1:1",
-                        "auth": {"secret_ref": "env:OPENAI_API_KEY"},
-                        "policy_id": null,
-                        "rate_limit": null
-                    }))
-                    .unwrap(),
-                ))
-                .unwrap(),
-        )
+        .oneshot(admin_request_with_key(
+            "PUT",
+            "/admin/providers/openai",
+            Some(json!({
+                "id": "openai",
+                "kind": "openai",
+                "base_url": "http://127.0.0.1:1",
+                "auth": {"secret_ref": "env:OPENAI_API_KEY"},
+                "policy_id": null,
+                "rate_limit": null
+            })),
+            None,
+        ))
         .await
         .unwrap();
     assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
 
     let invalid = app
+        .clone()
         .oneshot(
-            Request::builder()
-                .method("PUT")
-                .uri("/admin/providers/openai")
-                .header("content-type", "application/json")
-                .header("x-admin-key", "wrong-key")
-                .body(Body::from(
-                    serde_json::to_vec(&json!({
-                        "id": "openai",
-                        "kind": "openai",
-                        "base_url": "http://127.0.0.1:1",
-                        "auth": {"secret_ref": "env:OPENAI_API_KEY"},
-                        "policy_id": null,
-                        "rate_limit": null
-                    }))
-                    .unwrap(),
-                ))
-                .unwrap(),
+            admin_request_with_key(
+                "PUT",
+                "/admin/providers/openai",
+                Some(json!({
+                    "id": "openai",
+                    "kind": "openai",
+                    "base_url": "http://127.0.0.1:1",
+                    "auth": {"secret_ref": "env:OPENAI_API_KEY"},
+                    "policy_id": null,
+                    "rate_limit": null
+                })),
+                Some("wrong-key"),
+            ),
         )
         .await
         .unwrap();
     assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
+
+    let missing_get = app
+        .clone()
+        .oneshot(admin_request_with_key("GET", "/admin/providers/openai", None, None))
+        .await
+        .unwrap();
+    assert_eq!(missing_get.status(), StatusCode::UNAUTHORIZED);
+
+    let invalid_get = app
+        .clone()
+        .oneshot(admin_request_with_key(
+            "GET",
+            "/admin/providers/openai",
+            None,
+            Some("wrong-key"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid_get.status(), StatusCode::UNAUTHORIZED);
+
+    let missing_delete = app
+        .clone()
+        .oneshot(admin_request_with_key(
+            "DELETE",
+            "/admin/providers/openai",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing_delete.status(), StatusCode::UNAUTHORIZED);
+
+    let invalid_delete = app
+        .oneshot(admin_request_with_key(
+            "DELETE",
+            "/admin/providers/openai",
+            None,
+            Some("wrong-key"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(invalid_delete.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_get_missing_resources_return_not_found() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    for path in [
+        "/admin/providers/missing-provider",
+        "/admin/models/missing-model",
+        "/admin/apikeys/missing-key",
+        "/admin/policies/missing-policy",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(admin_request("GET", path, None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "path: {path}");
+    }
+}
+
+#[tokio::test]
+async fn admin_delete_missing_resources_return_not_found() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    for path in [
+        "/admin/providers/missing-provider",
+        "/admin/models/missing-model",
+        "/admin/apikeys/missing-key",
+        "/admin/policies/missing-policy",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(admin_request("DELETE", path, None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "path: {path}");
+    }
 }
 
 #[tokio::test]
@@ -279,6 +354,34 @@ async fn admin_rejects_path_and_body_id_mismatch() {
         json["error"]["message"],
         "path id 'openai' does not match body id 'different-provider'"
     );
+}
+
+#[tokio::test]
+async fn admin_rejects_ids_with_path_separators() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app
+        .oneshot(admin_put_request(
+            "/admin/providers/a%2Fb",
+            json!(ProviderConfig {
+                id: "a/b".to_string(),
+                kind: ProviderKind::OpenAi,
+                base_url: "https://api.openai.com".to_string(),
+                auth: ProviderAuth {
+                    secret_ref: "env:OPENAI_API_KEY".to_string(),
+                },
+                policy_id: None,
+                rate_limit: None,
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["message"], "admin resource id 'a/b' must not contain '/'");
 }
 
 #[tokio::test]
@@ -318,6 +421,414 @@ async fn admin_put_persists_provider_in_etcd_and_returns_write_revision() {
         .expect("provider should be persisted");
     assert_eq!(stored["id"], "openai");
     assert_eq!(stored["base_url"], "https://api.openai.com");
+}
+
+#[tokio::test]
+async fn admin_provider_get_list_and_delete_routes_use_live_etcd() {
+    let fixture = LiveEtcdTestApp::start().await;
+    fixture
+        .harness()
+        .put_json(
+            "/aisix/providers/z-provider",
+            &json!(ProviderConfig {
+                id: "z-provider".to_string(),
+                kind: ProviderKind::OpenAi,
+                base_url: "https://z.example.com".to_string(),
+                auth: ProviderAuth {
+                    secret_ref: "env:OPENAI_API_KEY".to_string(),
+                },
+                policy_id: None,
+                rate_limit: None,
+            }),
+        )
+        .await
+        .expect("provider fixture should be written");
+    fixture
+        .harness()
+        .put_json(
+            "/aisix/providers/a-provider",
+            &json!(ProviderConfig {
+                id: "a-provider".to_string(),
+                kind: ProviderKind::OpenAi,
+                base_url: "https://a.example.com".to_string(),
+                auth: ProviderAuth {
+                    secret_ref: "env:OPENAI_API_KEY".to_string(),
+                },
+                policy_id: None,
+                rate_limit: None,
+            }),
+        )
+        .await
+        .expect("provider fixture should be written");
+    let app = fixture.router();
+
+    let list = app
+        .clone()
+        .oneshot(admin_get_request("/admin/providers"))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+
+    let list_body = list.into_body().collect().await.unwrap().to_bytes();
+    let list_json: Value = serde_json::from_slice(&list_body).unwrap();
+    assert_eq!(list_json.as_array().map(Vec::len), Some(2));
+    assert_eq!(ids(&list_json), vec!["a-provider", "z-provider"]);
+
+    let get = app
+        .clone()
+        .oneshot(admin_get_request("/admin/providers/a-provider"))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+
+    let get_body = get.into_body().collect().await.unwrap().to_bytes();
+    let get_json: Value = serde_json::from_slice(&get_body).unwrap();
+    assert_eq!(get_json["id"], "a-provider");
+    assert_eq!(get_json["base_url"], "https://a.example.com");
+
+    let missing_before_delete = app
+        .clone()
+        .oneshot(admin_get_request("/admin/providers/missing-provider"))
+        .await
+        .unwrap();
+    assert_eq!(missing_before_delete.status(), StatusCode::NOT_FOUND);
+
+    let delete = app
+        .clone()
+        .oneshot(admin_delete_request("/admin/providers/a-provider"))
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::OK);
+
+    let delete_body = delete.into_body().collect().await.unwrap().to_bytes();
+    let delete_json: Value = serde_json::from_slice(&delete_body).unwrap();
+    assert_eq!(delete_json["id"], "a-provider");
+    assert_eq!(delete_json["path"], "/aisix/providers/a-provider");
+    assert!(delete_json["revision"].as_i64().unwrap() > 0);
+
+    let deleted = fixture
+        .harness()
+        .get_json("/aisix/providers/a-provider")
+        .await
+        .expect("etcd read should succeed");
+    assert!(deleted.is_none());
+
+    let missing_after_delete = app
+        .clone()
+        .oneshot(admin_get_request("/admin/providers/a-provider"))
+        .await
+        .unwrap();
+    assert_eq!(missing_after_delete.status(), StatusCode::NOT_FOUND);
+
+    let missing_delete = app
+        .oneshot(admin_delete_request("/admin/providers/a-provider"))
+        .await
+        .unwrap();
+    assert_eq!(missing_delete.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_model_get_list_and_delete_routes_use_live_etcd() {
+    let fixture = LiveEtcdTestApp::start().await;
+    fixture
+        .harness()
+        .put_json(
+            "/aisix/models/z-model",
+            &json!(ModelConfig {
+                id: "z-model".to_string(),
+                provider_id: "openai".to_string(),
+                upstream_model: "z-upstream".to_string(),
+                policy_id: None,
+                rate_limit: None,
+            }),
+        )
+        .await
+        .expect("model fixture should be written");
+    fixture
+        .harness()
+        .put_json(
+            "/aisix/models/a-model",
+            &json!(ModelConfig {
+                id: "a-model".to_string(),
+                provider_id: "openai".to_string(),
+                upstream_model: "a-upstream".to_string(),
+                policy_id: None,
+                rate_limit: None,
+            }),
+        )
+        .await
+        .expect("model fixture should be written");
+    let app = fixture.router();
+
+    let list = app
+        .clone()
+        .oneshot(admin_get_request("/admin/models"))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+
+    let list_body = list.into_body().collect().await.unwrap().to_bytes();
+    let list_json: Value = serde_json::from_slice(&list_body).unwrap();
+    assert_eq!(list_json.as_array().map(Vec::len), Some(2));
+    assert_eq!(ids(&list_json), vec!["a-model", "z-model"]);
+
+    let get = app
+        .clone()
+        .oneshot(admin_get_request("/admin/models/a-model"))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+
+    let get_body = get.into_body().collect().await.unwrap().to_bytes();
+    let get_json: Value = serde_json::from_slice(&get_body).unwrap();
+    assert_eq!(get_json["id"], "a-model");
+    assert_eq!(get_json["upstream_model"], "a-upstream");
+
+    let missing_before_delete = app
+        .clone()
+        .oneshot(admin_get_request("/admin/models/missing-model"))
+        .await
+        .unwrap();
+    assert_eq!(missing_before_delete.status(), StatusCode::NOT_FOUND);
+
+    let delete = app
+        .clone()
+        .oneshot(admin_delete_request("/admin/models/a-model"))
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::OK);
+
+    let delete_body = delete.into_body().collect().await.unwrap().to_bytes();
+    let delete_json: Value = serde_json::from_slice(&delete_body).unwrap();
+    assert_eq!(delete_json["id"], "a-model");
+    assert_eq!(delete_json["path"], "/aisix/models/a-model");
+    assert!(delete_json["revision"].as_i64().unwrap() > 0);
+
+    let deleted = fixture
+        .harness()
+        .get_json("/aisix/models/a-model")
+        .await
+        .expect("etcd read should succeed");
+    assert!(deleted.is_none());
+
+    let missing_after_delete = app
+        .clone()
+        .oneshot(admin_get_request("/admin/models/a-model"))
+        .await
+        .unwrap();
+    assert_eq!(missing_after_delete.status(), StatusCode::NOT_FOUND);
+
+    let missing_delete = app
+        .oneshot(admin_delete_request("/admin/models/a-model"))
+        .await
+        .unwrap();
+    assert_eq!(missing_delete.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_apikey_get_list_and_delete_routes_use_live_etcd() {
+    let fixture = LiveEtcdTestApp::start().await;
+    fixture
+        .harness()
+        .put_json(
+            "/aisix/apikeys/z-key",
+            &json!(ApiKeyConfig {
+                id: "z-key".to_string(),
+                key: "z-secret".to_string(),
+                allowed_models: vec!["gpt-4o-mini".to_string()],
+                policy_id: None,
+                rate_limit: None,
+            }),
+        )
+        .await
+        .expect("apikey fixture should be written");
+    fixture
+        .harness()
+        .put_json(
+            "/aisix/apikeys/a-key",
+            &json!(ApiKeyConfig {
+                id: "a-key".to_string(),
+                key: "a-secret".to_string(),
+                allowed_models: vec!["gpt-4o-mini".to_string()],
+                policy_id: None,
+                rate_limit: Some(RateLimitConfig {
+                    rpm: Some(10),
+                    tpm: None,
+                    concurrency: None,
+                }),
+            }),
+        )
+        .await
+        .expect("apikey fixture should be written");
+    let app = fixture.router();
+
+    let list = app
+        .clone()
+        .oneshot(admin_get_request("/admin/apikeys"))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+
+    let list_body = list.into_body().collect().await.unwrap().to_bytes();
+    let list_json: Value = serde_json::from_slice(&list_body).unwrap();
+    assert_eq!(list_json.as_array().map(Vec::len), Some(2));
+    assert_eq!(ids(&list_json), vec!["a-key", "z-key"]);
+    assert_eq!(list_json[0]["key"], "a-secret");
+    assert_eq!(list_json[1]["key"], "z-secret");
+
+    let get = app
+        .clone()
+        .oneshot(admin_get_request("/admin/apikeys/a-key"))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+
+    let get_body = get.into_body().collect().await.unwrap().to_bytes();
+    let get_json: Value = serde_json::from_slice(&get_body).unwrap();
+    assert_eq!(get_json["id"], "a-key");
+    assert_eq!(get_json["key"], "a-secret");
+
+    let missing_before_delete = app
+        .clone()
+        .oneshot(admin_get_request("/admin/apikeys/missing-key"))
+        .await
+        .unwrap();
+    assert_eq!(missing_before_delete.status(), StatusCode::NOT_FOUND);
+
+    let delete = app
+        .clone()
+        .oneshot(admin_delete_request("/admin/apikeys/a-key"))
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::OK);
+
+    let delete_body = delete.into_body().collect().await.unwrap().to_bytes();
+    let delete_json: Value = serde_json::from_slice(&delete_body).unwrap();
+    assert_eq!(delete_json["id"], "a-key");
+    assert_eq!(delete_json["path"], "/aisix/apikeys/a-key");
+    assert!(delete_json["revision"].as_i64().unwrap() > 0);
+
+    let deleted = fixture
+        .harness()
+        .get_json("/aisix/apikeys/a-key")
+        .await
+        .expect("etcd read should succeed");
+    assert!(deleted.is_none());
+
+    let missing_after_delete = app
+        .clone()
+        .oneshot(admin_get_request("/admin/apikeys/a-key"))
+        .await
+        .unwrap();
+    assert_eq!(missing_after_delete.status(), StatusCode::NOT_FOUND);
+
+    let missing_delete = app
+        .oneshot(admin_delete_request("/admin/apikeys/a-key"))
+        .await
+        .unwrap();
+    assert_eq!(missing_delete.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_policy_get_list_and_delete_routes_use_live_etcd() {
+    let fixture = LiveEtcdTestApp::start().await;
+    fixture
+        .harness()
+        .put_json(
+            "/aisix/policies/z-policy",
+            &json!(PolicyConfig {
+                id: "z-policy".to_string(),
+                rate_limit: RateLimitConfig {
+                    rpm: Some(200),
+                    tpm: None,
+                    concurrency: None,
+                },
+            }),
+        )
+        .await
+        .expect("policy fixture should be written");
+    fixture
+        .harness()
+        .put_json(
+            "/aisix/policies/a-policy",
+            &json!(PolicyConfig {
+                id: "a-policy".to_string(),
+                rate_limit: RateLimitConfig {
+                    rpm: Some(100),
+                    tpm: Some(1000),
+                    concurrency: Some(2),
+                },
+            }),
+        )
+        .await
+        .expect("policy fixture should be written");
+    let app = fixture.router();
+
+    let list = app
+        .clone()
+        .oneshot(admin_get_request("/admin/policies"))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+
+    let list_body = list.into_body().collect().await.unwrap().to_bytes();
+    let list_json: Value = serde_json::from_slice(&list_body).unwrap();
+    assert_eq!(list_json.as_array().map(Vec::len), Some(2));
+    assert_eq!(ids(&list_json), vec!["a-policy", "z-policy"]);
+
+    let get = app
+        .clone()
+        .oneshot(admin_get_request("/admin/policies/a-policy"))
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+
+    let get_body = get.into_body().collect().await.unwrap().to_bytes();
+    let get_json: Value = serde_json::from_slice(&get_body).unwrap();
+    assert_eq!(get_json["id"], "a-policy");
+    assert_eq!(get_json["rate_limit"]["rpm"], 100);
+    assert_eq!(get_json["rate_limit"]["tpm"], 1000);
+    assert_eq!(get_json["rate_limit"]["concurrency"], 2);
+
+    let missing_before_delete = app
+        .clone()
+        .oneshot(admin_get_request("/admin/policies/missing-policy"))
+        .await
+        .unwrap();
+    assert_eq!(missing_before_delete.status(), StatusCode::NOT_FOUND);
+
+    let delete = app
+        .clone()
+        .oneshot(admin_delete_request("/admin/policies/a-policy"))
+        .await
+        .unwrap();
+    assert_eq!(delete.status(), StatusCode::OK);
+
+    let delete_body = delete.into_body().collect().await.unwrap().to_bytes();
+    let delete_json: Value = serde_json::from_slice(&delete_body).unwrap();
+    assert_eq!(delete_json["id"], "a-policy");
+    assert_eq!(delete_json["path"], "/aisix/policies/a-policy");
+    assert!(delete_json["revision"].as_i64().unwrap() > 0);
+
+    let deleted = fixture
+        .harness()
+        .get_json("/aisix/policies/a-policy")
+        .await
+        .expect("etcd read should succeed");
+    assert!(deleted.is_none());
+
+    let missing_after_delete = app
+        .clone()
+        .oneshot(admin_get_request("/admin/policies/a-policy"))
+        .await
+        .unwrap();
+    assert_eq!(missing_after_delete.status(), StatusCode::NOT_FOUND);
+
+    let missing_delete = app
+        .oneshot(admin_delete_request("/admin/policies/a-policy"))
+        .await
+        .unwrap();
+    assert_eq!(missing_delete.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -568,12 +1079,40 @@ fn test_startup_config(etcd: aisix_config::startup::EtcdConfig) -> aisix_config:
 }
 
 fn admin_put_request(path: &str, body: Value) -> Request<Body> {
-    Request::builder()
-        .method("PUT")
-        .uri(path)
-        .header("content-type", "application/json")
-        .header("x-admin-key", "test-admin-key")
-        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+    admin_request_with_key("PUT", path, Some(body), Some("test-admin-key"))
+}
+
+fn admin_get_request(path: &str) -> Request<Body> {
+    admin_request_with_key("GET", path, None, Some("test-admin-key"))
+}
+
+fn admin_delete_request(path: &str) -> Request<Body> {
+    admin_request_with_key("DELETE", path, None, Some("test-admin-key"))
+}
+
+fn admin_request(method: &str, path: &str, body: Option<Value>) -> Request<Body> {
+    admin_request_with_key(method, path, body, Some("test-admin-key"))
+}
+
+fn admin_request_with_key(
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+    admin_key: Option<&str>,
+) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(path);
+    if let Some(admin_key) = admin_key {
+        builder = builder.header("x-admin-key", admin_key);
+    }
+    if body.is_some() {
+        builder = builder.header("content-type", "application/json");
+    }
+
+    builder
+        .body(match body {
+            Some(body) => Body::from(serde_json::to_vec(&body).unwrap()),
+            None => Body::empty(),
+        })
         .unwrap()
 }
 
@@ -592,6 +1131,15 @@ fn chat_request(token: &str, model: &str) -> Request<Body> {
             .unwrap(),
         ))
         .unwrap()
+}
+
+fn ids(list_json: &Value) -> Vec<&str> {
+    list_json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect()
 }
 
 async fn with_env_var<F, Fut, T>(name: &str, value: Option<&str>, f: F) -> T

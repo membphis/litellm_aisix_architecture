@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{loader::EtcdEntry, startup::EtcdConfig};
 
@@ -9,6 +9,13 @@ use crate::{loader::EtcdEntry, startup::EtcdConfig};
 pub struct AdminStoreWrite {
     pub key: String,
     pub revision: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminStoreDelete {
+    pub key: String,
+    pub revision: i64,
+    pub existed: bool,
 }
 
 pub fn resource_key(prefix: &str, collection: &str, id: &str) -> String {
@@ -74,12 +81,59 @@ impl EtcdStore {
         })
     }
 
+    pub async fn get_json<T: DeserializeOwned>(
+        &mut self,
+        prefix: &str,
+        collection: &str,
+        id: &str,
+    ) -> Result<Option<T>> {
+        let key = resource_key(prefix, collection, id);
+        let response = self
+            .client
+            .get(key.clone(), None)
+            .await
+            .context("failed to read admin config")?;
+        let Some(kv) = response.kvs().first() else {
+            return Ok(None);
+        };
+
+        let value =
+            serde_json::from_slice(kv.value()).with_context(|| format!("failed to decode admin config at {key}"))?;
+        Ok(Some(value))
+    }
+
+    pub async fn list_json<T: DeserializeOwned>(
+        &mut self,
+        prefix: &str,
+        collection: &str,
+    ) -> Result<Vec<T>> {
+        let collection_key = format!("{}/{collection}/", prefix.trim_end_matches('/'));
+        let response = self
+            .client
+            .get(
+                collection_key.as_str(),
+                Some(etcd_client::GetOptions::new().with_prefix()),
+            )
+            .await
+            .context("failed to list admin config")?;
+
+        response
+            .kvs()
+            .iter()
+            .map(|kv| {
+                let key = String::from_utf8_lossy(kv.key()).into_owned();
+                serde_json::from_slice(kv.value())
+                    .with_context(|| format!("failed to decode admin config at {key}"))
+            })
+            .collect()
+    }
+
     pub async fn delete(
         &mut self,
         prefix: &str,
         collection: &str,
         id: &str,
-    ) -> Result<AdminStoreWrite> {
+    ) -> Result<AdminStoreDelete> {
         let key = resource_key(prefix, collection, id);
         let response = self
             .client
@@ -87,9 +141,10 @@ impl EtcdStore {
             .await
             .context("failed to delete admin config")?;
 
-        Ok(AdminStoreWrite {
+        Ok(AdminStoreDelete {
             key,
             revision: response.header().map(|header| header.revision()).unwrap_or(0),
+            existed: response.deleted() > 0,
         })
     }
 

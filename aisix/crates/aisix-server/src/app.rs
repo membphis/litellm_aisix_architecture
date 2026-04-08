@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use anyhow::Context;
 use aisix_core::AppState;
 use aisix_providers::ProviderRegistry;
-use axum::{Router, routing::{get, post, put}};
+use axum::{Router, routing::{get, post}};
 
 use crate::{admin, handlers, health};
 
@@ -29,10 +29,34 @@ pub fn build_router(state: ServerState) -> Router {
 
     let router = if state.admin.is_some() {
         router
-            .route("/admin/providers/:id", put(admin::providers::put_provider))
-            .route("/admin/models/:id", put(admin::models::put_model))
-            .route("/admin/apikeys/:id", put(admin::apikeys::put_apikey))
-            .route("/admin/policies/:id", put(admin::policies::put_policy))
+            .route("/admin/providers", get(admin::providers::list_providers))
+            .route(
+                "/admin/providers/:id",
+                get(admin::providers::get_provider)
+                    .put(admin::providers::put_provider)
+                    .delete(admin::providers::delete_provider),
+            )
+            .route("/admin/models", get(admin::models::list_models))
+            .route(
+                "/admin/models/:id",
+                get(admin::models::get_model)
+                    .put(admin::models::put_model)
+                    .delete(admin::models::delete_model),
+            )
+            .route("/admin/apikeys", get(admin::apikeys::list_apikeys))
+            .route(
+                "/admin/apikeys/:id",
+                get(admin::apikeys::get_apikey)
+                    .put(admin::apikeys::put_apikey)
+                    .delete(admin::apikeys::delete_apikey),
+            )
+            .route("/admin/policies", get(admin::policies::list_policies))
+            .route(
+                "/admin/policies/:id",
+                get(admin::policies::get_policy)
+                    .put(admin::policies::put_policy)
+                    .delete(admin::policies::delete_policy),
+            )
     } else {
         router
     };

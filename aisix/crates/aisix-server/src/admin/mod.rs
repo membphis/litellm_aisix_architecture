@@ -24,7 +24,7 @@ pub struct AdminState {
 impl std::fmt::Debug for AdminState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AdminState")
-            .field("keys", &self.keys)
+            .field("key_count", &self.keys.len())
             .field("prefix", &self.prefix)
             .finish_non_exhaustive()
     }
@@ -79,6 +79,34 @@ impl AdminState {
         self.put("models", id, &model).await
     }
 
+    pub async fn get_provider(&self, id: &str) -> Result<ProviderConfig, GatewayError> {
+        self.get("providers", id).await
+    }
+
+    pub async fn list_providers(&self) -> Result<Vec<ProviderConfig>, GatewayError> {
+        let mut providers = self.list("providers").await?;
+        providers.sort_by(|left: &ProviderConfig, right: &ProviderConfig| left.id.cmp(&right.id));
+        Ok(providers)
+    }
+
+    pub async fn delete_provider(&self, id: &str) -> Result<AdminWriteResult, GatewayError> {
+        self.delete("providers", id).await
+    }
+
+    pub async fn get_model(&self, id: &str) -> Result<ModelConfig, GatewayError> {
+        self.get("models", id).await
+    }
+
+    pub async fn list_models(&self) -> Result<Vec<ModelConfig>, GatewayError> {
+        let mut models = self.list("models").await?;
+        models.sort_by(|left: &ModelConfig, right: &ModelConfig| left.id.cmp(&right.id));
+        Ok(models)
+    }
+
+    pub async fn delete_model(&self, id: &str) -> Result<AdminWriteResult, GatewayError> {
+        self.delete("models", id).await
+    }
+
     pub async fn put_apikey(
         &self,
         id: &str,
@@ -87,12 +115,40 @@ impl AdminState {
         self.put("apikeys", id, &apikey).await
     }
 
+    pub async fn get_apikey(&self, id: &str) -> Result<ApiKeyConfig, GatewayError> {
+        self.get("apikeys", id).await
+    }
+
+    pub async fn list_apikeys(&self) -> Result<Vec<ApiKeyConfig>, GatewayError> {
+        let mut apikeys = self.list("apikeys").await?;
+        apikeys.sort_by(|left: &ApiKeyConfig, right: &ApiKeyConfig| left.id.cmp(&right.id));
+        Ok(apikeys)
+    }
+
+    pub async fn delete_apikey(&self, id: &str) -> Result<AdminWriteResult, GatewayError> {
+        self.delete("apikeys", id).await
+    }
+
     pub async fn put_policy(
         &self,
         id: &str,
         policy: PolicyConfig,
     ) -> Result<AdminWriteResult, GatewayError> {
         self.put("policies", id, &policy).await
+    }
+
+    pub async fn get_policy(&self, id: &str) -> Result<PolicyConfig, GatewayError> {
+        self.get("policies", id).await
+    }
+
+    pub async fn list_policies(&self) -> Result<Vec<PolicyConfig>, GatewayError> {
+        let mut policies = self.list("policies").await?;
+        policies.sort_by(|left: &PolicyConfig, right: &PolicyConfig| left.id.cmp(&right.id));
+        Ok(policies)
+    }
+
+    pub async fn delete_policy(&self, id: &str) -> Result<AdminWriteResult, GatewayError> {
+        self.delete("policies", id).await
     }
 
     async fn put<T>(
@@ -116,6 +172,45 @@ impl AdminState {
             revision: write.revision,
         })
     }
+
+    async fn get<T>(&self, collection: &str, id: &str) -> Result<T, GatewayError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let mut etcd = self.etcd.lock().await;
+        etcd.get_json(&self.prefix, collection, id)
+            .await
+            .map_err(internal_admin_error)?
+            .ok_or_else(|| missing_admin_resource(collection, id))
+    }
+
+    async fn list<T>(&self, collection: &str) -> Result<Vec<T>, GatewayError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let mut etcd = self.etcd.lock().await;
+        etcd.list_json(&self.prefix, collection)
+            .await
+            .map_err(internal_admin_error)
+    }
+
+    async fn delete(&self, collection: &str, id: &str) -> Result<AdminWriteResult, GatewayError> {
+        let mut etcd = self.etcd.lock().await;
+        let deleted = etcd
+            .delete(&self.prefix, collection, id)
+            .await
+            .map_err(internal_admin_error)?;
+
+        if !deleted.existed {
+            return Err(missing_admin_resource(collection, id));
+        }
+
+        Ok(AdminWriteResult {
+            id: id.to_string(),
+            path: deleted.key,
+            revision: deleted.revision,
+        })
+    }
 }
 
 fn internal_admin_error(error: impl std::fmt::Display) -> GatewayError {
@@ -125,7 +220,17 @@ fn internal_admin_error(error: impl std::fmt::Display) -> GatewayError {
     }
 }
 
+fn missing_admin_resource(collection: &str, id: &str) -> GatewayError {
+    GatewayError {
+        kind: ErrorKind::NotFound,
+        message: format!("{collection} '{id}' not found"),
+    }
+}
+
 pub fn ensure_path_matches_body_id(path_id: &str, body_id: &str) -> Result<(), GatewayError> {
+    ensure_valid_resource_id(path_id)?;
+    ensure_valid_resource_id(body_id)?;
+
     if path_id == body_id {
         return Ok(());
     }
@@ -134,4 +239,15 @@ pub fn ensure_path_matches_body_id(path_id: &str, body_id: &str) -> Result<(), G
         kind: ErrorKind::InvalidRequest,
         message: format!("path id '{path_id}' does not match body id '{body_id}'"),
     })
+}
+
+pub fn ensure_valid_resource_id(id: &str) -> Result<(), GatewayError> {
+    if id.contains('/') {
+        return Err(GatewayError {
+            kind: ErrorKind::InvalidRequest,
+            message: format!("admin resource id '{id}' must not contain '/'"),
+        });
+    }
+
+    Ok(())
 }

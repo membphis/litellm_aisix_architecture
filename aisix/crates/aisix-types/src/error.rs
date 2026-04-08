@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum ErrorKind {
     Authentication,
     Permission,
+    NotFound,
     InvalidRequest,
     RateLimited,
     Timeout,
@@ -27,6 +28,7 @@ impl GatewayError {
         match self.kind {
             ErrorKind::Authentication => StatusCode::UNAUTHORIZED,
             ErrorKind::Permission => StatusCode::FORBIDDEN,
+            ErrorKind::NotFound => StatusCode::NOT_FOUND,
             ErrorKind::InvalidRequest => StatusCode::BAD_REQUEST,
             ErrorKind::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorKind::Timeout => StatusCode::GATEWAY_TIMEOUT,
@@ -66,7 +68,22 @@ fn error_type(status: StatusCode) -> &'static str {
     match status {
         StatusCode::UNAUTHORIZED => "authentication_error",
         StatusCode::FORBIDDEN => "permission_error",
+        StatusCode::NOT_FOUND => "invalid_request_error",
         StatusCode::BAD_REQUEST => "invalid_request_error",
+        StatusCode::TOO_MANY_REQUESTS => "rate_limit_error",
         _ => "server_error",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_too_many_requests_to_rate_limit_error() {
+        assert_eq!(
+            error_type(StatusCode::TOO_MANY_REQUESTS),
+            "rate_limit_error"
+        );
     }
 }
