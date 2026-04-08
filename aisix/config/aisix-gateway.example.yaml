@@ -16,7 +16,7 @@ log:
   level: "info"
 
 runtime:
-  worker_threads: 0
+  worker_threads: 1
 
 deployment:
   admin:

@@ -16,7 +16,7 @@ use aisix_providers::ProviderRegistry;
 use aisix_types::{entities::KeyMeta, usage::Usage};
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    http::{HeaderMap, HeaderValue, Request, StatusCode},
 };
 use http_body_util::BodyExt;
 use hyper::{body::{Bytes, Incoming}, service::service_fn};
@@ -211,6 +211,40 @@ async fn cache_entry_is_invalidated_when_snapshot_config_changes() {
     );
     assert_eq!(capture.hits(), 2);
     assert_eq!(capture.model(), Some("gpt-4o-mini-2024-08-01".to_string()));
+}
+
+#[test]
+fn rebuilt_non_stream_responses_strip_stale_body_headers() {
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    headers.insert("content-length", HeaderValue::from_static("999"));
+    headers.insert("transfer-encoding", HeaderValue::from_static("chunked"));
+
+    let response = aisix_server::pipeline::build_response(
+        StatusCode::OK,
+        Body::from("{\"ok\":true}"),
+        headers,
+        Some("false"),
+        Some("openai"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    assert!(response.headers().get("transfer-encoding").is_none());
+    assert_ne!(
+        response
+            .headers()
+            .get("content-length")
+            .and_then(|value| value.to_str().ok()),
+        Some("999")
+    );
 }
 
 fn test_state(snapshot: CompiledSnapshot, ready: bool) -> aisix_server::app::ServerState {

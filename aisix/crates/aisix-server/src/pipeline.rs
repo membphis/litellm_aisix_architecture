@@ -9,7 +9,7 @@ use aisix_types::{
 };
 use axum::{
     body::Body,
-    http::{HeaderName, HeaderValue, Response},
+    http::{HeaderName, HeaderValue, Response, header},
 };
 
 use crate::{app::ServerState, stream_proxy::build_stream_response};
@@ -181,7 +181,7 @@ pub async fn run_chat_stream_pipeline(
     build_stream_response(output.status, output.body, output.headers, &provider.id, usage)
 }
 
-fn build_response(
+pub fn build_response(
     status: http::StatusCode,
     body: impl Into<Body>,
     mut headers: http::HeaderMap,
@@ -189,6 +189,10 @@ fn build_response(
     provider_id: Option<&str>,
     usage: Option<aisix_types::usage::Usage>,
 ) -> Result<Response<Body>, GatewayError> {
+    headers.remove(header::CONTENT_LENGTH);
+    headers.remove(header::TRANSFER_ENCODING);
+    headers.remove(header::CONNECTION);
+
     if cache_hit.is_some() && !headers.contains_key(http::header::CONTENT_TYPE) {
         headers.insert(
             http::header::CONTENT_TYPE,
