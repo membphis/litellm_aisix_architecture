@@ -65,33 +65,33 @@
 ### 数据面节点内部结构
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                    AISIX Data Plane Node                 │
-│                                                          │
-│  ┌────────────────┐   ┌──────────────────────────────┐   │
-│  │ etcd Watcher   │──▶│ Arc<CompiledSnapshot>        │   │
-│  │ (config sync)  │   │ (immutable, ArcSwap atomic)  │   │
-│  └────────────────┘   └──────────────┬───────────────┘   │
-│                                      │                   │
-│  ┌───────────────────────────────────▼────────────────┐  │
-│  │              Request Pipeline (axum/tower)         │  │
-│  │                                                    │  │
-│  │  Authc → Authz → Mutation → RateLimit → Guardrail  │  │
-│  │  → Cache → Router → Provider → Guardrail → Spend   │  │
-│  │  → Logging → Response                              │  │
-│  └──────────────────────────┬─────────────────────────┘  │
-│                             │                            │
-│  ┌──────────────────────────▼─────────────────────────┐  │
-│  │           Upstream Pool (hyper client)             │  │
-│  │  pool: scheme+host+port, HTTP/2, keepalive         │  │
-│  └────────────────────────────────────────────────────┘  │
-│                                                          │
-│  ┌─────────────────┐  ┌───────────────────────────────┐  │
-│  │ Redis Client    │  │ Background Tasks              │  │
-│  │ (rate/cache/cc) │  │ - emit UsageEvent (structlog) │  │
-│  └─────────────────┘  │ - health chk / metrics        │  │
-│                        └──────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    AISIX Data Plane Node                     │
+│                                                              │
+│  ┌────────────────┐   ┌──────────────────────────────┐       │
+│  │ etcd Watcher   │──▶│ Arc<CompiledSnapshot>        │       │
+│  │ (config sync)  │   │ (immutable, ArcSwap atomic)  │       │
+│  └────────────────┘   └──────────────┬───────────────┘       │
+│                                      │                       │
+│  ┌───────────────────────────────────▼────────────────────┐  │
+│  │                Request Pipeline (axum/tower)           │  │
+│  │                                                        │  │
+│  │  Decode → Authz → Mutation → RateLimit → PreCall Guard │  │
+│  │  → Cache → Router → Provider → Upstream → PostCall     │  │
+│  │  Guard → Spend → Logging                               │  │
+│  └──────────────────────────┬─────────────────────────────┘  │
+│                             │                                │
+│  ┌──────────────────────────▼─────────────────────────────┐  │
+│  │           Upstream Pool (reqwest client)               │  │
+│  │  pool: scheme+host+port, HTTP/2, keepalive             │  │
+│  └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌─────────────────┐  ┌───────────────────────────────────┐  │
+│  │ Redis Client    │  │ Background Tasks                  │  │
+│  │ (rate/cache/cc) │  │ - emit UsageEvent (structlog)     │  │
+│  └─────────────────┘  │ - health chk / metrics            │  │
+│                        └──────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### 为什么选择 etcd 协议
@@ -290,7 +290,7 @@ pub trait ProviderCodec: Send + Sync + 'static {
         &self,
         ctx: &RequestContext,
         target: &ResolvedTarget,
-        client: &UpstreamClient,
+        client: &reqwest::Client,
     ) -> Result<ProviderOutput, GatewayError> {
         let req = self.build_request(ctx, target)?;
         let raw_resp = client.send(req).await
@@ -566,7 +566,7 @@ Client Request
 │  8. PreUpstream     inject prompt + replace vars + override   │
 │  9. UpstreamHeaders assemble upstream auth headers, Host      │
 │  10. StreamChunk    send request + transcode stream + forward │
-│  11. PostCall       billing/usage update, cache write, webhook│
+│  11. PostCall       spawn(PostCallContext): cache, usage, log │
 │  12. OnError        classify error → error response + fallback│
 └───────────────────────────────────────────────────────────────┘
 ```
@@ -798,7 +798,8 @@ async fn chat_completions(
     rate_limit::check(&ctx, &state).await?;      // 有配置则查 Redis，否则 no-op
     guardrail::pre_call(&ctx, &state).await?;    // 有配置则调 HTTP callback，否则 no-op
     if let Some(resp) = cache::lookup(&ctx, &state).await? {
-        tokio::spawn(post_call::run(ctx, state)); // 异步计费/日志
+        let post_call_ctx = ctx.into_post_call_context();
+        tokio::spawn(post_call::run(post_call_ctx, state)); // 异步计费/日志
         return Ok(resp);
     }
     pre_upstream::apply(&mut ctx, &state)?;      // 有配置则渲染 prompt template，否则 no-op
@@ -808,7 +809,8 @@ async fn chat_completions(
     // stream_chunk::proxy 阻塞直到响应（含流）全部写入客户端连接，ctx.usage 已填充
     let resp = stream_chunk::proxy(&mut ctx, &state).await?;
 
-    tokio::spawn(post_call::run(ctx, state));     // 异步：扣费 + 写日志，不阻塞响应
+    let post_call_ctx = ctx.into_post_call_context();
+    tokio::spawn(post_call::run(post_call_ctx, state));     // 异步：扣费 + 写日志，不阻塞响应
     Ok(resp)
 }
 ```
@@ -862,7 +864,8 @@ async fn run_pipeline(
     rate_limit::check(&ctx, &state).await?;
     guardrail::pre_call(&ctx, &state).await?;
     if let Some(resp) = cache::lookup(&ctx, &state).await? {
-        tokio::spawn(post_call::run(ctx, state));
+        let post_call_ctx = ctx.into_post_call_context();
+        tokio::spawn(post_call::run(post_call_ctx, state));
         return Ok(resp);
     }
     pre_upstream::apply(&mut ctx, &state)?;
@@ -873,10 +876,14 @@ async fn run_pipeline(
     //   - TransportMode::Json / BinaryStream：完整响应体发送完毕后返回，ctx.usage 已填充。
     //   - TransportMode::SseStream：将全部 SSE 帧（含 data:[DONE]）写入客户端连接后返回，
     //     ctx.usage 在流结束时由 StreamEvent::Usage 累积写入，proxy 返回时已可安全读取。
-    // 因此 post_call 可在 proxy 返回后立即 spawn，无需共享所有权或额外同步机制。
     let resp = stream_chunk::proxy(&mut ctx, &state).await?;
 
-    tokio::spawn(post_call::run(ctx, state));   // 异步：扣费 + 写日志，不阻塞调用方
+    // 从 RequestContext 中提取 post_call 所需的最小数据集（PostCallContext），
+    // 确保 SSE stream 响应体的生命周期不与 post_call task 共享引用。
+    // PostCallContext 包含：usage、key_id、model、provider_id、cache_hit 等，
+    // 均为 owned 值（String、u64、bool），不借用 ctx 内部数据。
+    let post_call_ctx = ctx.into_post_call_context();
+    tokio::spawn(post_call::run(post_call_ctx, state));   // 异步：扣费 + 写日志，不阻塞调用方
     Ok(resp)
 }
 ```
@@ -957,7 +964,8 @@ src/pipeline/
 #[derive(Clone)]
 pub struct AppState {
     /// 当前生效的编译快照，ArcSwap 允许无锁原子替换
-    pub snapshot: Arc<ArcSwap<CompiledSnapshot>>,
+    /// （ArcSwap 本身内部持有 Arc，无需外层再包 Arc）
+    pub snapshot: ArcSwap<CompiledSnapshot>,
     /// Redis 连接池（bb8 或 deadpool）
     pub redis: RedisPool,
     /// 上游 HTTP 客户端（复用连接池）
@@ -1095,34 +1103,43 @@ request complete (正常结束 / 客户端断开 / 超时):
   ```rust
   impl Drop for ConcurrencyGuard {
       fn drop(&mut self) {
-          // 无论正常结束、panic、客户端断开，均触发 ZREM
-          let _ = self.redis.zrem(&self.key, &self.request_id);
+          // 无论正常结束、panic、客户端断开，均触发 ZREM。
+          // Drop::drop 是同步函数，不能直接调用 async Redis 操作，
+          // 因此 spawn 一个独立 task 来执行异步 ZREM。
+          let key = self.key.clone();
+          let request_id = self.request_id.clone();
+          let redis = self.redis.clone();
+          tokio::spawn(async move {
+              let _ = redis.zrem(&key, &request_id).await;
+          });
       }
   }
   ```
 - `stream_chunk` future 被 cancel 时（客户端断开），tokio 会 drop 持有 guard 的 future，
-  触发 `Drop::drop`，保证 ZREM 执行（cancel-safe）。
+  触发 `Drop::drop`，进而 spawn 异步 ZREM task（cancel-safe）。
 - 同时设置 `expires_at = now + max_request_timeout`，作为双重保险：
   即使 gateway 崩溃未执行 Drop，过期条目也会在下次请求时被 `ZREMRANGEBYSCORE` 自动清理。
 
-### Spend 追踪：异步管道
+### Spend 追踪：异步 Spawn
 
-**关键：请求线程永不阻塞在日志写入上。**
+**关键：请求路径永不阻塞在日志/计费写入上。**
+
+`post_call::run` 通过 `tokio::spawn` 在独立 task 中执行，不阻塞响应返回：
 
 ```
-request path
-  → create UsageEvent
-  → send to bounded mpsc channel
-  → return response to client immediately
+request path (run_pipeline)
+  → stream_chunk::proxy 返回 Response
+  → tokio::spawn(post_call::run(post_call_ctx, state))
+  → 立即返回 Response 给客户端
 
-background batch processor
-  ← consume from channel
+post_call task (独立 tokio task)
   ├── increment Redis real-time spend counter
+  ├── deduct actual token usage from Redis quota
   └── write structured log (JSON, one line per event)
 ```
 
-数据面输出的 UsageEvent 由外部 log agent（Vector/Fluentd 等）采集，
-控制面负责写入 PostgreSQL usage_events 及聚合汇总表。
+`post_call::run` 接收 `PostCallContext`（从 `RequestContext` 拆分出的最小数据集），
+确保 SSE stream 响应体的生命周期不与 post_call task 共享引用。
 
 ### 预算执行层级
 
@@ -1156,7 +1173,7 @@ Global Proxy Budget
 │                                    │  - BedrockCodec (incl. binary eventstream)
 ├────────────────────────────────────┤
 │  Shared Transport Layer            │  unified upstream HTTP client
-│  (hyper client pool)               │  - connection pool (by scheme+host+port)
+│  (reqwest client pool)             │  - connection pool (by scheme+host+port)
 │                                    │  - HTTP/2 preferred, HTTP/1.1 keepalive
 │                                    │  - DNS cache
 │                                    │  - per-origin timeout config
@@ -1247,13 +1264,18 @@ pub enum ErrorKind {
     Unsupported,             // 501
 }
 
+impl ErrorKind {
+    /// 基于错误类型判断是否可重试，统一重试/fallback 决策。
+    /// 重试和 fallback 逻辑基于此方法返回值，不基于 provider 特定字符串。
+    pub fn retryable(&self) -> bool {
+        matches!(self, RateLimited | Timeout | UpstreamUnavailable | Overloaded)
+    }
+}
+
 // 每个归一化错误携带：
-// - retryable: bool
 // - provider_status: Option<u16>
 // - provider_code: Option<String>
 // - provider_request_id: Option<String>
-//
-// 重试和 fallback 逻辑基于归一化类型，不基于 provider 特定字符串
 ```
 
 ---
@@ -1481,7 +1503,7 @@ aisix/
 | Crate | 职责 | 拥有的状态/数据 |
 |-------|------|----------------|
 | `aisix-types` | 共享类型定义 | CanonicalRequest/Response, TransportMode, Usage, IDs, Error 枚举 |
-| `aisix-core` | 核心抽象 | RequestContext, GatewayState, 管线编排逻辑 |
+| `aisix-core` | 核心抽象 | RequestContext, GatewayState |
 | `aisix-config` | 配置系统 | CompiledSnapshot, etcd watcher, 验证器 |
 | `aisix-storage` | Redis 计数器与缓存；密钥解析 | Redis repo, 密钥解析器（PG 不在数据面依赖中） |
 | `aisix-auth` | 认证 | Principal 解析, Key 校验 |
@@ -1494,7 +1516,7 @@ aisix/
 | `aisix-spend` | 费用 | UsageEvent, 定价表, 批量管道 |
 | `aisix-observability` | 可观测 | Metrics, tracing spans, callback sink |
 | `aisix-runtime` | 运行时 | 后台任务注册, 快照生命周期 |
-| `aisix-server` | HTTP 服务 | axum 路由, 中间件, SSE 处理 |
+| `aisix-server` | HTTP 服务 | axum 路由, 中间件, SSE 处理|
 
 ### 依赖关系图
 
@@ -1538,7 +1560,7 @@ aisix/
 | 用途 | Crate | 说明 |
 |------|-------|------|
 | HTTP Server | `axum` + `tower` | Tower 中间件生态，流式友好 |
-| HTTP Client | `hyper` + `hyper-util` | 底层零拷贝，连接池 |
+| HTTP Client | `reqwest` | 上游 HTTP 调用（底层 hyper），连接池，流式响应 |
 | Async Runtime | `tokio` | 多线程运行时 |
 | 序列化 | `serde` + `serde_json` + `serde_yaml` | 配置/请求解析 |
 | etcd 客户端 | `etcd-client` | etcd v3 客户端, 支持 watch/lease/TXN |
@@ -1599,9 +1621,13 @@ aisix/
 - etcd 配置源 + 热加载
 - 基础 Spend 追踪：记录请求 token 用量（input/output tokens）
 - 响应头：`x-aisix-provider`、`x-aisix-cache-hit`
-- **最小化 Admin HTTP API**：Provider / Model / Virtual Key 的 CRUD（内嵌于 aisix-gateway，无需独立部署），满足真实测试和早期使用
+- **最小化 Admin HTTP API**：Provider / Model / Virtual Key 的 CRUD，默认内嵌于 aisix-gateway（开箱即用）。支持通过配置开关控制：开发/测试阶段启用内嵌 Admin API；生产环境可关闭 Admin API 或通过独立部署控制面（aisix-admin）来管理，以满足安全和隔离需求
+- `/health`（liveness）+ `/ready`（readiness）HTTP 健康检查端点（复用 metrics 端口），确保 Kubernetes liveness/readiness probe 可用
+- etcd 运行时断连重连机制：watch 连接断开后自动重试重连，重连期间使用旧快照继续提供服务
 
 **预计工期：4-6 周**
+
+> **开发/测试环境**：使用单实例 etcd 即可，无需集群部署。
 
 ### Phase 2 — 生产基线
 构建优先:
@@ -1611,7 +1637,6 @@ aisix/
 - Budget 层级（Global→Key→Customer；Team/Member 见第十五章 TODO #1）
 - Per-Model 限流
 - Provider 健康检查 + Cooldown
-- `/health`（liveness）+ `/ready`（readiness）HTTP 健康检查端点（见第十五章 TODO #6）
 - **Spend 计费价格设计**（见第十五章 TODO #3）：定价表来源确定后，补全 cost 计算
 - 响应头增强：`x-aisix-cost`、`x-aisix-remaining-budget`
 - Latency-based / Usage-based 路由
@@ -1629,6 +1654,7 @@ aisix/
 - Admin 只读检查端点
 - 告警（Slack/Email）
 - Responses API / Images / Audio
+- **优雅关闭**（Graceful Shutdown）：SIGTERM 信号处理 + 停止接收新请求 + 等待 in-flight 请求完成 + 排空异步任务管道
 
 **预计工期：4-8 周**
 
@@ -1956,7 +1982,10 @@ async fn test_streaming_usage_tracked() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // 查询 Redis，验证 token 计数已扣除
-    let tpm_used: i64 = app.redis.get("rl:tpm:key:key-001:gpt-4o-mini:*").await;
+    let tpm_used: i64 = app.redis.get(format!(
+        "rl:tpm:key:key-001:gpt-4o-mini:{}",
+        current_minute_window()
+    )).await;
     assert!(tpm_used >= 30, "expected at least 30 tokens (10 in + 20 out)");
 }
 ```
@@ -2079,13 +2108,14 @@ async fn test_etcd_unavailable_at_startup_fails() {
 }
 ```
 
-### TC-16：Redis 故障时请求放行（降级为无限流）
+### TC-16：Redis 故障时请求放行（降级为仅本地限流）
 
 ```rust
-/// 验证：Redis 不可用时，限流检查降级（pass-through），请求仍被转发
-///      这是"可用性优先"策略：宁可放行，不因 Redis 故障拒绝所有请求
+/// 验证：Redis 不可用时，限流检查降级为仅本地 shadow 限流器，请求仍被转发
+///      本地 shadow 限流器（in-memory GCRA）继续工作，精度降低但仍有基本保护
+///      这是"可用性优先"策略：宁可降级，不因 Redis 故障拒绝所有请求
 #[tokio::test]
-async fn test_redis_failure_passthrough() {
+async fn test_redis_failure_degrade_to_local() {
     let app = TestApp::start_with_redis_down().await;
     // mock upstream 仍正常响应
 
@@ -2098,7 +2128,7 @@ async fn test_redis_failure_passthrough() {
         }))
         .send().await.unwrap();
 
-    // Redis 故障时请求应被放行（返回 200），而非 500/429
+    // Redis 故障时请求应被放行（返回 200），降级为仅本地限流，而非 500/429
     assert_eq!(resp.status(), 200);
 }
 ```
