@@ -15,6 +15,7 @@ pub struct EtcdHarness {
     endpoint: String,
 }
 
+#[allow(dead_code)]
 impl EtcdHarness {
     pub async fn start() -> Result<Self> {
         let guard = harness_lock()
