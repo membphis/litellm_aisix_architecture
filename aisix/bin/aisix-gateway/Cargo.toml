@@ -10,3 +10,7 @@ aisix-runtime = { path = "../../crates/aisix-runtime" }
 aisix-server = { path = "../../crates/aisix-server" }
 anyhow.workspace = true
 tokio.workspace = true
+tracing = "0.1"
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

@@ -4,6 +4,7 @@ use anyhow::Context;
 use aisix_core::AppState;
 use aisix_providers::ProviderRegistry;
 use axum::{Router, routing::{get, post}};
+use tracing::info;
 
 use crate::{admin, handlers, health};
 
@@ -68,7 +69,9 @@ pub async fn serve(state: AppState, listen: &str, admin: Option<admin::AdminStat
     let address: SocketAddr = listen
         .parse()
         .with_context(|| format!("invalid listen address: {listen}"))?;
+    log_binding_http_listener(address, admin.is_some());
     let listener = tokio::net::TcpListener::bind(address).await?;
+    log_gateway_listening(address, admin.is_some());
 
     axum::serve(
         listener,
@@ -80,4 +83,79 @@ pub async fn serve(state: AppState, listen: &str, admin: Option<admin::AdminStat
     )
         .await
         .map_err(Into::into)
+}
+
+fn log_binding_http_listener(address: SocketAddr, admin_enabled: bool) {
+    info!(listen = %address, admin_enabled, "binding http listener");
+}
+
+fn log_gateway_listening(address: SocketAddr, admin_enabled: bool) {
+    info!(listen = %address, admin_enabled, "gateway listening");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io,
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        sync::{Arc, Mutex},
+    };
+
+    use tracing::subscriber::with_default;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    use super::{log_binding_http_listener, log_gateway_listening};
+
+    #[test]
+    fn server_logs_binding_and_listening_state() {
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4000);
+        let output = capture_logs(|| {
+            log_binding_http_listener(address, true);
+            log_gateway_listening(address, true);
+        });
+
+        assert!(output.contains("binding http listener"));
+        assert!(output.contains("gateway listening"));
+        assert!(output.contains("127.0.0.1:4000"));
+        assert!(output.contains("admin_enabled=true"));
+    }
+
+    fn capture_logs(run: impl FnOnce()) -> String {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_target(false)
+            .with_writer(TestWriter(buffer.clone()))
+            .finish();
+
+        with_default(subscriber, run);
+
+        let captured = buffer.lock().unwrap().clone();
+        String::from_utf8(captured).unwrap()
+    }
+
+    #[derive(Clone)]
+    struct TestWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> MakeWriter<'a> for TestWriter {
+        type Writer = TestWriterGuard;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            TestWriterGuard(self.0.clone())
+        }
+    }
+
+    struct TestWriterGuard(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for TestWriterGuard {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 }

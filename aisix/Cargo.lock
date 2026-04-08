@@ -70,6 +70,8 @@ dependencies = [
  "aisix-server",
  "anyhow",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -130,6 +132,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -158,6 +162,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower 0.5.3",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

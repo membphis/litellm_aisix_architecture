@@ -13,6 +13,7 @@ use aisix_config::{
 };
 use aisix_types::error::{ErrorKind, GatewayError};
 use serde::Serialize;
+use tracing::info;
 
 #[derive(Clone)]
 pub struct AdminState {
@@ -40,10 +41,12 @@ pub struct AdminWriteResult {
 impl AdminState {
     pub async fn from_startup_config(config: &StartupConfig) -> anyhow::Result<Option<Self>> {
         if !config.deployment.admin.enabled {
+            log_admin_disabled();
             return Ok(None);
         }
 
         let etcd = EtcdStore::connect(&config.etcd).await?;
+        log_admin_ready(config.deployment.admin.admin_keys.len(), &config.etcd.prefix);
         Ok(Some(Self {
             keys: Arc::new(
                 config
@@ -213,6 +216,14 @@ impl AdminState {
     }
 }
 
+fn log_admin_disabled() {
+    info!("admin api disabled");
+}
+
+fn log_admin_ready(admin_key_count: usize, etcd_prefix: &str) {
+    info!(admin_key_count, etcd_prefix, "admin api ready");
+}
+
 fn internal_admin_error(error: impl std::fmt::Display) -> GatewayError {
     GatewayError {
         kind: ErrorKind::Internal,
@@ -250,4 +261,72 @@ pub fn ensure_valid_resource_id(id: &str) -> Result<(), GatewayError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io,
+        sync::{Arc, Mutex},
+    };
+
+    use tracing::subscriber::with_default;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    use super::{log_admin_disabled, log_admin_ready};
+
+    #[test]
+    fn admin_disabled_log_is_emitted() {
+        let output = capture_logs(log_admin_disabled);
+
+        assert!(output.contains("admin api disabled"));
+    }
+
+    #[test]
+    fn admin_ready_log_includes_key_count_and_prefix() {
+        let output = capture_logs(|| log_admin_ready(2, "/aisix"));
+
+        assert!(output.contains("admin api ready"));
+        assert!(output.contains("admin_key_count=2"));
+        assert!(output.contains("/aisix"));
+    }
+
+    fn capture_logs(run: impl FnOnce()) -> String {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_target(false)
+            .with_writer(TestWriter(buffer.clone()))
+            .finish();
+
+        with_default(subscriber, run);
+
+        let captured = buffer.lock().unwrap().clone();
+        String::from_utf8(captured).unwrap()
+    }
+
+    #[derive(Clone)]
+    struct TestWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> MakeWriter<'a> for TestWriter {
+        type Writer = TestWriterGuard;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            TestWriterGuard(self.0.clone())
+        }
+    }
+
+    struct TestWriterGuard(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for TestWriterGuard {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 }

@@ -8,9 +8,11 @@ aisix-config = { path = "../aisix-config" }
 aisix-core = { path = "../aisix-core" }
 aisix-storage = { path = "../aisix-storage" }
 anyhow.workspace = true
+tracing = "0.1"
 
 [dev-dependencies]
 etcd-client.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

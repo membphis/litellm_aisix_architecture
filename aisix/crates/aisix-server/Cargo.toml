@@ -20,6 +20,7 @@ http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["net"] }
+tracing = "0.1"
 
 [dev-dependencies]
 aisix-runtime = { path = "../aisix-runtime" }
@@ -32,3 +33,4 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 serde_json.workspace = true
 tower = { version = "0.5", features = ["util"] }
 tokio.workspace = true
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
