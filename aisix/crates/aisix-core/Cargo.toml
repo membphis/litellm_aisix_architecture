@@ -1,0 +1,14 @@
+[package]
+name = "aisix-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-cache = { path = "../aisix-cache" }
+aisix-config = { path = "../aisix-config" }
+aisix-ratelimit = { path = "../aisix-ratelimit" }
+aisix-spend = { path = "../aisix-spend" }
+aisix-storage = { path = "../aisix-storage" }
+aisix-types = { path = "../aisix-types" }
+arc-swap = "1"
+uuid.workspace = true

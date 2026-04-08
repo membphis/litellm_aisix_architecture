@@ -1,0 +1,9 @@
+[package]
+name = "aisix-observability"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+prometheus = "0.13"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }

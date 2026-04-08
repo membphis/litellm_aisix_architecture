@@ -1,0 +1,9 @@
+[package]
+name = "aisix-ratelimit"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-config = { path = "../aisix-config" }
+aisix-storage = { path = "../aisix-storage" }
+aisix-types = { path = "../aisix-types" }

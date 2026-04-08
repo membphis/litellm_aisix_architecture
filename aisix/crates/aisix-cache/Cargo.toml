@@ -1,0 +1,9 @@
+[package]
+name = "aisix-cache"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-types = { path = "../aisix-types" }
+bytes.workspace = true
+serde_json.workspace = true

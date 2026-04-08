@@ -1,0 +1,8 @@
+[package]
+name = "aisix-storage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "time"] }

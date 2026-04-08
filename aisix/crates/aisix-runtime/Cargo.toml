@@ -1,0 +1,10 @@
+[package]
+name = "aisix-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-config = { path = "../aisix-config" }
+aisix-core = { path = "../aisix-core" }
+aisix-storage = { path = "../aisix-storage" }
+anyhow.workspace = true

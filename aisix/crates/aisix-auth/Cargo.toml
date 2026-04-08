@@ -1,0 +1,11 @@
+[package]
+name = "aisix-auth"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-config = { path = "../aisix-config" }
+aisix-core = { path = "../aisix-core" }
+aisix-types = { path = "../aisix-types" }
+axum = "0.7"
+chrono.workspace = true

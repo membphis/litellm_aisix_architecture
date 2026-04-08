@@ -1,0 +1,7 @@
+[package]
+name = "aisix-policy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-types = { path = "../aisix-types" }

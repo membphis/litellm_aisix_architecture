@@ -1,0 +1,8 @@
+[package]
+name = "aisix-spend"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-storage = { path = "../aisix-storage" }
+aisix-types = { path = "../aisix-types" }

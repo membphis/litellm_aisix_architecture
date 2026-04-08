@@ -1,0 +1,33 @@
+[package]
+name = "aisix-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-auth = { path = "../aisix-auth" }
+aisix-cache = { path = "../aisix-cache" }
+aisix-config = { path = "../aisix-config" }
+aisix-core = { path = "../aisix-core" }
+aisix-providers = { path = "../aisix-providers" }
+aisix-policy = { path = "../aisix-policy" }
+aisix-router = { path = "../aisix-router" }
+aisix-types = { path = "../aisix-types" }
+anyhow.workspace = true
+arc-swap = "1"
+axum = "0.7"
+http-body-util = "0.1"
+http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["net"] }
+
+[dev-dependencies]
+aisix-runtime = { path = "../aisix-runtime" }
+aisix-types = { path = "../aisix-types" }
+chrono.workspace = true
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+serde_json.workspace = true
+tower = { version = "0.5", features = ["util"] }
+tokio.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "aisix-providers"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-config = { path = "../aisix-config" }
+aisix-types = { path = "../aisix-types" }
+async-trait = "0.1"
+bytes.workspace = true
+http.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde_json.workspace = true

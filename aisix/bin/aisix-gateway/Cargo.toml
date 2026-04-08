@@ -1,0 +1,12 @@
+[package]
+name = "aisix-gateway"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-config = { path = "../../crates/aisix-config" }
+aisix-observability = { path = "../../crates/aisix-observability" }
+aisix-runtime = { path = "../../crates/aisix-runtime" }
+aisix-server = { path = "../../crates/aisix-server" }
+anyhow.workspace = true
+tokio.workspace = true

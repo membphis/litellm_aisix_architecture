@@ -1,0 +1,8 @@
+[package]
+name = "aisix-router"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+aisix-config = { path = "../aisix-config" }
+aisix-types = { path = "../aisix-types" }
