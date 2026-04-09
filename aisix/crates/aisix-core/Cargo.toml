@@ -12,3 +12,6 @@ aisix-storage = { path = "../aisix-storage" }
 aisix-types = { path = "../aisix-types" }
 arc-swap = "1"
 uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

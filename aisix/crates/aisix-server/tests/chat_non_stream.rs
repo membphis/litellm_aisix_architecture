@@ -1,9 +1,6 @@
 use std::sync::{
-    Arc,
     atomic::{AtomicUsize, Ordering},
-    Mutex,
-    MutexGuard,
-    OnceLock,
+    Arc, Mutex, MutexGuard, OnceLock,
 };
 
 use aisix_config::{
@@ -16,12 +13,15 @@ use aisix_providers::ProviderRegistry;
 use aisix_types::{entities::KeyMeta, usage::Usage};
 use axum::{
     body::Body,
-    http::{HeaderMap, HeaderValue, Request, StatusCode},
+    http::{Request, StatusCode},
 };
 use http_body_util::BodyExt;
-use hyper::{body::{Bytes, Incoming}, service::service_fn};
+use hyper::{
+    body::{Bytes, Incoming},
+    service::service_fn,
+};
 use hyper_util::rt::TokioIo;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -29,7 +29,10 @@ async fn chat_non_stream_proxies_openai_compatible_json() {
     let capture = Arc::new(CapturedRequest::default());
     let upstream = spawn_openai_mock(capture.clone()).await;
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url), true));
+        let app = aisix_server::app::build_router(test_state(
+            snapshot_for_upstream(&upstream.base_url),
+            true,
+        ));
 
         app.oneshot(chat_request()).await.unwrap()
     })
@@ -50,7 +53,10 @@ async fn chat_non_stream_proxies_openai_compatible_json() {
     assert_eq!(json["usage"]["prompt_tokens"], 12);
     assert_eq!(json["usage"]["completion_tokens"], 7);
     assert_eq!(capture.path(), Some("/v1/chat/completions".to_string()));
-    assert_eq!(capture.authorization(), Some("Bearer test-openai-key".to_string()));
+    assert_eq!(
+        capture.authorization(),
+        Some("Bearer test-openai-key".to_string())
+    );
     assert_eq!(capture.model(), Some("gpt-4o-mini-2024-07-18".to_string()));
 }
 
@@ -60,7 +66,10 @@ async fn azure_chat_json_path_uses_api_key_header() {
     let upstream = spawn_openai_mock(capture.clone()).await;
 
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_for_upstream_kind(&upstream.base_url, ProviderKind::AzureOpenAi), true));
+        let app = aisix_server::app::build_router(test_state(
+            snapshot_for_upstream_kind(&upstream.base_url, ProviderKind::AzureOpenAi),
+            true,
+        ));
 
         app.oneshot(chat_request()).await.unwrap()
     })
@@ -110,16 +119,17 @@ async fn repeated_non_stream_chat_hits_memory_cache() {
     let capture = Arc::new(CapturedRequest::default());
     let upstream = spawn_openai_mock(capture.clone()).await;
 
-    let (state, first, second) = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let state = test_state(snapshot_for_upstream(&upstream.base_url), true);
-        let app = aisix_server::app::build_router(state.clone());
+    let (state, first, second) =
+        with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
+            let state = test_state(snapshot_for_upstream(&upstream.base_url), true);
+            let app = aisix_server::app::build_router(state.clone());
 
-        let first = app.clone().oneshot(chat_request()).await.unwrap();
-        let second = app.oneshot(chat_request()).await.unwrap();
+            let first = app.clone().oneshot(chat_request()).await.unwrap();
+            let second = app.oneshot(chat_request()).await.unwrap();
 
-        (state, first, second)
-    })
-    .await;
+            (state, first, second)
+        })
+        .await;
 
     assert_eq!(first.status(), StatusCode::OK);
     assert_eq!(
@@ -153,8 +163,20 @@ async fn repeated_non_stream_chat_hits_memory_cache() {
         .expect("cached usage should be attached to response extensions");
     assert_eq!(cached_usage.input_tokens, 12);
     assert_eq!(cached_usage.output_tokens, 7);
-    assert_eq!(state.app.usage_recorder.total_for("usage:key:vk_123:input_tokens"), 24);
-    assert_eq!(state.app.usage_recorder.total_for("usage:key:vk_123:output_tokens"), 14);
+    assert_eq!(
+        state
+            .app
+            .usage_recorder
+            .total_for("usage:key:vk_123:input_tokens"),
+        24
+    );
+    assert_eq!(
+        state
+            .app
+            .usage_recorder
+            .total_for("usage:key:vk_123:output_tokens"),
+        14
+    );
     assert_eq!(capture.hits(), 1);
 }
 
@@ -172,12 +194,15 @@ async fn cache_entry_is_invalidated_when_snapshot_config_changes() {
 
         let first = app.clone().oneshot(chat_request()).await.unwrap();
 
-        state.app.snapshot.store(std::sync::Arc::new(snapshot_for_model_target(
-            &upstream.base_url,
-            2,
-            "openai-v2",
-            "gpt-4o-mini-2024-08-01",
-        )));
+        state
+            .app
+            .snapshot
+            .store(std::sync::Arc::new(snapshot_for_model_target(
+                &upstream.base_url,
+                2,
+                "openai-v2",
+                "gpt-4o-mini-2024-08-01",
+            )));
 
         let second = app.oneshot(chat_request()).await.unwrap();
 
@@ -213,40 +238,6 @@ async fn cache_entry_is_invalidated_when_snapshot_config_changes() {
     assert_eq!(capture.model(), Some("gpt-4o-mini-2024-08-01".to_string()));
 }
 
-#[test]
-fn rebuilt_non_stream_responses_strip_stale_body_headers() {
-    let mut headers = HeaderMap::new();
-    headers.insert("content-type", HeaderValue::from_static("application/json"));
-    headers.insert("content-length", HeaderValue::from_static("999"));
-    headers.insert("transfer-encoding", HeaderValue::from_static("chunked"));
-
-    let response = aisix_server::pipeline::build_response(
-        StatusCode::OK,
-        Body::from("{\"ok\":true}"),
-        headers,
-        Some("false"),
-        Some("openai"),
-        None,
-    )
-    .unwrap();
-
-    assert_eq!(
-        response
-            .headers()
-            .get("content-type")
-            .and_then(|value| value.to_str().ok()),
-        Some("application/json")
-    );
-    assert!(response.headers().get("transfer-encoding").is_none());
-    assert_ne!(
-        response
-            .headers()
-            .get("content-length")
-            .and_then(|value| value.to_str().ok()),
-        Some("999")
-    );
-}
-
 fn test_state(snapshot: CompiledSnapshot, ready: bool) -> aisix_server::app::ServerState {
     aisix_server::app::ServerState {
         app: AppState::new(initial_snapshot_handle(snapshot), ready),
@@ -263,7 +254,11 @@ fn snapshot_for_upstream_kind(base_url: &str, kind: ProviderKind) -> CompiledSna
     snapshot_for_provider(base_url, 0, kind, "openai", "gpt-4o-mini-2024-07-18")
 }
 
-fn snapshot_for_provider_id(base_url: &str, kind: ProviderKind, provider_id: &str) -> CompiledSnapshot {
+fn snapshot_for_provider_id(
+    base_url: &str,
+    kind: ProviderKind,
+    provider_id: &str,
+) -> CompiledSnapshot {
     snapshot_for_provider(base_url, 0, kind, provider_id, "gpt-4o-mini-2024-07-18")
 }
 

@@ -21,6 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["net"] }
 tracing = "0.1"
+uuid.workspace = true
 
 [dev-dependencies]
 aisix-runtime = { path = "../aisix-runtime" }
