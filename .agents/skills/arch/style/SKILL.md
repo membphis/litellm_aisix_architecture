@@ -102,8 +102,9 @@ struct GatewayError { kind: ErrorKind, message: String }
 
 ### 3. Result<_, String>（配置编译）
 
-`compile_snapshot()` 返回 `Result<CompiledSnapshot, String>`。
+`compile_snapshot()` 返回 `Result<SnapshotCompileReport, String>`。
 错误是格式化字符串，不跨越 HTTP 边界。
+编译报告字段和 skip/fail 语义以 `arch-data-model` 为准。
 
 ### 规则
 

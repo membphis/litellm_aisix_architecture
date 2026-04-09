@@ -58,7 +58,7 @@ related:
 - **角色**：所有运行时配置的唯一真相来源
 - **连接**：标准 etcd 客户端，通过 `etcd-client` crate
 - **Key 前缀**：可配置，默认 `/aisix`
-- **启动行为**：etcd 不可达时网关**拒绝启动**（fail-fast）
+- **启动行为**：etcd 不可达时网关**拒绝启动**（fail-fast）；若 etcd 可达但部分资源依赖无效，网关加载有效子集并启动
 - **运行时行为**：watch 断开后自动重连；重连期间旧快照继续服务
 
 ### Redis（限流必需）
@@ -118,7 +118,7 @@ etcd watch 事件 (revision N+1)
 | 防抖窗口 | 250-500ms 合并窗口，处理快速连续变更 |
 | 后台编译 | 不阻塞请求路径 |
 | 原子指针交换 | 通过 ArcSwap 实现无锁读取 |
-| 失败保护 | 编译失败时保留旧快照 |
+| 配置收敛 | 资源级 skip / 硬错误保留旧快照；详见 `arch-data-model` |
 
 ### 为什么用 ArcSwap 而非 RwLock
 
@@ -132,9 +132,11 @@ etcd watch 事件 (revision N+1)
 2. 连接 etcd，GET 完整前缀范围（捕获 revision N）
 3. 解析 secret 引用（`env:KEY` → 实际值）
 4. 执行三层校验（schema → 语义 → 运行时预检）
-5. `compile_snapshot()` 产出 `CompiledSnapshot`
+5. `compile_snapshot()` 产出编译报告并发布可用快照
 6. `ArcSwap.store()` — 网关开始服务
 7. 从 revision N+1 启动后台 watcher
+
+配置编译的详细规则（哪些资源会被跳过、哪些错误会阻止发布）统一以 `arch-data-model` 为准。
 
 ## Crate 选型
 

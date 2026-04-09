@@ -37,7 +37,7 @@ related:
 ## 核心架构原则
 
 **不可变编译快照 + ArcSwap 原子切换。** 配置热加载零停机。
-编译失败的无效配置不会影响正在运行的快照。watcher 从 etcd 编译新快照后原子替换。
+watcher 从 etcd 编译新快照后原子替换：依赖无效的当前资源会被跳过并视为 absent，硬错误则阻止发布并保留旧快照。
 
 ```
 etcd watch → 后台 tokio 任务 → compile_snapshot() → ArcSwap.store()
@@ -225,14 +225,26 @@ pub struct CompiledSnapshot {
 
 ## 配置编译规则
 
-`compile_snapshot()` 是**纯函数**（无 I/O），执行以下校验：
+`compile_snapshot()` 是**纯函数**（无 I/O），返回 `Result<SnapshotCompileReport, String>`。
+
+它执行以下规则：
 
 1. 重复 ID 检测 → 两个实体共享同一 `id` 则拒绝
-2. 外键校验 → model 的 `provider_id` 必须存在
-3. 策略引用校验 → `policy_id` 如已设置则必须存在
+2. 重复明文 API key 检测 → 两个 key 共享同一 `key` 则拒绝
+3. 外键/策略引用校验 → 引用缺失时跳过当前资源并记录 `CompileIssue`
 4. 限流解析 → 合并策略默认值与内联覆盖
 
-编译失败时，错误被记录日志，**旧快照继续生效**。
+资源级语义：
+
+- provider 引用缺失 policy → 该 provider 跳过
+- model 引用缺失 provider 或 policy → 该 model 跳过
+- apikey 引用缺失 model 或 policy → 该 apikey 跳过
+- 被跳过资源在当前运行时快照中视为 absent，不保留旧版本
+
+发布语义：
+
+- 仅存在 `CompileIssue` 时，watcher 发布有效资源子集并记录日志
+- 出现硬错误（如 duplicate id / duplicate token）时，本次发布失败，旧快照继续生效
 
 ## 四层存储模型
 

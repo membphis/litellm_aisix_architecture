@@ -205,13 +205,14 @@ pub enum ProviderOutput {
 
 Admin 写入先到 **etcd**。后台 watcher 异步应用变更。
 成功的 PUT/DELETE 意味着 etcd 接受了写入，并不代表运行时快照已更新。
+当前资源如果依赖无效，可能暂时不会出现在运行时快照中；其他有效资源继续收敛。详细编译语义见 `arch-data-model`。
 
 写入响应格式：
 ```json
 { "id": "openai", "path": "/aisix/providers/openai", "revision": 123 }
 ```
 
-允许乱序写入（例如先写 model 再写其 provider）。收敛在 watcher 层完成。
+允许乱序写入（例如先写 model 再写其 provider）。收敛在 watcher 层完成；依赖补齐后，后续 reload 会自动纳入该资源。
 
 ### 错误码
 
