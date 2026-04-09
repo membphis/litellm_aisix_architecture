@@ -55,8 +55,10 @@ fn compiles_snapshot_from_etcd_entries() {
         ),
     ];
 
-    let snapshot =
+    let report =
         compile_snapshot_from_entries("/aisix/", &entries, 9).expect("snapshot should compile");
+
+    let snapshot = report.snapshot;
 
     assert_eq!(snapshot.revision, 9);
     assert!(snapshot.providers_by_id.contains_key("openai"));
@@ -65,7 +67,7 @@ fn compiles_snapshot_from_etcd_entries() {
 }
 
 #[test]
-fn rejects_invalid_model_reference_from_etcd_entries() {
+fn reports_invalid_model_reference_from_etcd_entries() {
     let entries = vec![
         EtcdEntry::json(
             "/aisix/providers/openai",
@@ -90,10 +92,14 @@ fn rejects_invalid_model_reference_from_etcd_entries() {
         ),
     ];
 
-    let error = compile_snapshot_from_entries("/aisix", &entries, 2)
-        .expect_err("invalid references should fail");
+    let report = compile_snapshot_from_entries("/aisix", &entries, 2)
+        .expect("invalid references should be reported");
 
-    assert_eq!(error, "missing provider reference: missing-provider");
+    assert!(report.snapshot.models_by_name.is_empty());
+    assert_eq!(report.issues.len(), 1);
+    assert_eq!(report.issues[0].kind, "model");
+    assert_eq!(report.issues[0].id, "gpt-4o-mini");
+    assert_eq!(report.issues[0].reason, "missing provider reference: missing-provider");
 }
 
 #[test]

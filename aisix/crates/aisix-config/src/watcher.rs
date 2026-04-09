@@ -5,9 +5,10 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use arc_swap::ArcSwap;
 use tokio::task::{AbortHandle, JoinHandle};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
+    SnapshotCompileReport,
     etcd::EtcdStore,
     loader::compile_snapshot_from_entries,
     snapshot::CompiledSnapshot,
@@ -154,17 +155,51 @@ async fn reload_snapshot_and_revision(
 ) -> Result<()> {
     let mut store = EtcdStore::connect(config).await?;
     let (entries, new_revision) = store.load_prefix(&config.prefix).await?;
-    revision.store(new_revision, Ordering::Release);
 
-    let compiled = compile_snapshot_from_entries(&config.prefix, &entries, new_revision)
+    let report = compile_snapshot_from_entries(&config.prefix, &entries, new_revision)
         .map_err(anyhow::Error::msg)?;
-    snapshot.store(Arc::new(compiled));
+    log_snapshot_compile_report(&config.prefix, new_revision, "reloaded", &report);
+    snapshot.store(Arc::new(report.snapshot));
+    revision.store(new_revision, Ordering::Release);
     Ok(())
 }
 
 async fn reload_snapshot(store: &mut EtcdStore, config: &EtcdConfig) -> Result<CompiledSnapshot> {
     let (entries, revision) = store.load_prefix(&config.prefix).await?;
-    compile_snapshot_from_entries(&config.prefix, &entries, revision).map_err(anyhow::Error::msg)
+    let report = compile_snapshot_from_entries(&config.prefix, &entries, revision)
+        .map_err(anyhow::Error::msg)?;
+    log_snapshot_compile_report(&config.prefix, revision, "loaded", &report);
+    Ok(report.snapshot)
+}
+
+fn log_snapshot_compile_report(
+    prefix: &str,
+    revision: i64,
+    action: &'static str,
+    report: &SnapshotCompileReport,
+) {
+    if report.issues.is_empty() {
+        info!(prefix = %prefix, revision, "snapshot {action} successfully");
+        return;
+    }
+
+    info!(
+        prefix = %prefix,
+        revision,
+        skipped_resources = report.issues.len(),
+        "snapshot {action} successfully with skipped resources"
+    );
+
+    for issue in &report.issues {
+        warn!(
+            prefix = %prefix,
+            revision,
+            resource_kind = issue.kind,
+            resource_id = %issue.id,
+            reason = %issue.reason,
+            "skipped invalid resource during snapshot compile"
+        );
+    }
 }
 
 #[cfg(test)]

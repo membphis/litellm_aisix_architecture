@@ -154,7 +154,7 @@ pub fn normalize_anthropic_chat_sse(body: &[u8]) -> Result<NormalizedOpenAiSse, 
                     "choices": [{
                         "index": 0,
                         "delta": {},
-                        "finish_reason": finish_reason.clone().unwrap_or("stop"),
+                        "finish_reason": finish_reason.unwrap_or("stop"),
                     }],
                     "usage": final_usage,
                 });

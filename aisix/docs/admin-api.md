@@ -4,6 +4,10 @@
 
 The Admin API manages runtime config stored in etcd under the configured prefix.
 
+The runtime snapshot is compiled from the valid subset of resources currently stored under that prefix.
+Resources with invalid dependencies are skipped and treated as absent from the live runtime until they are fixed.
+Other valid resources continue to compile and apply normally.
+
 All Admin requests require:
 
 - header `x-admin-key: <admin-key>`
@@ -154,7 +158,9 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/models/gpt-4o-mini \
 ```
 
 The write can succeed even if `openai` has not been written yet.
-The runtime only picks it up after a later full snapshot compiles successfully.
+Until that provider exists, the model is dependency-invalid and absent from the runtime snapshot.
+Other valid resources continue to apply while this model is skipped.
+Once `openai` is written, a later reload includes `gpt-4o-mini` automatically.
 
 ### List API Keys
 

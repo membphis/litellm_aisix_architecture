@@ -54,7 +54,7 @@ fn api_key() -> ApiKeyConfig {
 
 #[test]
 fn compile_snapshot_prefers_inline_key_limits() {
-    let snapshot = compile_snapshot(
+    let report = compile_snapshot(
         vec![provider()],
         vec![model()],
         vec![api_key()],
@@ -62,6 +62,8 @@ fn compile_snapshot_prefers_inline_key_limits() {
         42,
     )
     .expect("snapshot should compile");
+
+    let snapshot = report.snapshot;
 
     let meta = snapshot
         .keys_by_token
@@ -90,7 +92,7 @@ fn compile_snapshot_merges_partial_inline_limits_with_policy() {
         concurrency: None,
     });
 
-    let snapshot = compile_snapshot(
+    let report = compile_snapshot(
         vec![provider()],
         vec![model()],
         vec![partial_key],
@@ -98,6 +100,8 @@ fn compile_snapshot_merges_partial_inline_limits_with_policy() {
         99,
     )
     .expect("partial inline limits should inherit policy values");
+
+    let snapshot = report.snapshot;
 
     let limits = snapshot
         .key_limits
@@ -118,7 +122,7 @@ fn compile_snapshot_resolves_provider_and_model_limits() {
         concurrency: Some(4),
     });
 
-    let snapshot = compile_snapshot(
+    let report = compile_snapshot(
         vec![inline_provider],
         vec![model()],
         vec![api_key()],
@@ -126,6 +130,8 @@ fn compile_snapshot_resolves_provider_and_model_limits() {
         7,
     )
     .expect("snapshot with provider/model limits should compile");
+
+    let snapshot = report.snapshot;
 
     let provider_limits = snapshot
         .provider_limits
@@ -240,87 +246,235 @@ fn compile_snapshot_rejects_duplicate_api_key_ids() {
 }
 
 #[test]
-fn compile_snapshot_rejects_unknown_allowed_model() {
+fn compile_snapshot_skips_api_keys_with_unknown_allowed_model() {
     let mut key = api_key();
     key.allowed_models = vec!["missing-model".to_string()];
 
-    let error = compile_snapshot(
+    let report = compile_snapshot(
         vec![provider()],
         vec![model()],
         vec![key],
         vec![policy()],
         1,
     )
-    .expect_err("unknown allowed model should fail compilation");
+    .expect("unknown allowed model should be skipped");
 
-    assert!(error.contains("missing model reference: missing-model"));
+    assert!(!report.snapshot.keys_by_token.contains_key("sk-test"));
+    assert!(!report.snapshot.apikeys_by_id.contains_key("key-1"));
+    assert_eq!(report.issues.len(), 1);
+    assert_eq!(report.issues[0].kind, "api key");
+    assert_eq!(report.issues[0].id, "key-1");
+    assert_eq!(
+        report.issues[0].reason,
+        "missing model reference: missing-model"
+    );
 }
 
 #[test]
-fn compile_snapshot_rejects_unknown_model_provider() {
+fn compile_snapshot_skips_models_with_missing_provider_references() {
     let mut broken_model = model();
+    broken_model.id = "broken-model".to_string();
     broken_model.provider_id = "missing-provider".to_string();
 
-    let error = compile_snapshot(
+    let report = compile_snapshot(
         vec![provider()],
-        vec![broken_model],
-        vec![api_key()],
+        vec![model(), broken_model],
+        vec![],
         vec![policy()],
-        1,
+        11,
     )
-    .expect_err("unknown provider should fail compilation");
+    .expect("snapshot should compile by skipping invalid models");
 
-    assert!(error.contains("missing provider reference: missing-provider"));
+    assert!(report.snapshot.models_by_name.contains_key("gpt-4o-mini"));
+    assert!(!report.snapshot.models_by_name.contains_key("broken-model"));
+    assert_eq!(report.issues.len(), 1);
+    assert_eq!(report.issues[0].kind, "model");
+    assert_eq!(report.issues[0].id, "broken-model");
+    assert_eq!(
+        report.issues[0].reason,
+        "missing provider reference: missing-provider"
+    );
 }
 
 #[test]
-fn compile_snapshot_rejects_unknown_api_key_policy() {
+fn compile_snapshot_skips_api_keys_with_unknown_policy() {
     let mut key = api_key();
     key.policy_id = Some("missing-policy".to_string());
     key.rate_limit = None;
 
-    let error = compile_snapshot(
+    let report = compile_snapshot(
         vec![provider()],
         vec![model()],
         vec![key],
         vec![policy()],
         1,
     )
-    .expect_err("unknown api key policy should fail compilation");
+    .expect("unknown api key policy should be skipped");
 
-    assert!(error.contains("missing policy reference: missing-policy"));
+    assert!(!report.snapshot.keys_by_token.contains_key("sk-test"));
+    assert!(!report.snapshot.apikeys_by_id.contains_key("key-1"));
+    assert_eq!(report.issues.len(), 1);
+    assert_eq!(report.issues[0].kind, "api key");
+    assert_eq!(report.issues[0].id, "key-1");
+    assert_eq!(
+        report.issues[0].reason,
+        "missing policy reference: missing-policy"
+    );
 }
 
 #[test]
-fn compile_snapshot_rejects_unknown_model_policy() {
+fn compile_snapshot_skips_models_with_unknown_policy() {
     let mut broken_model = model();
     broken_model.policy_id = Some("missing-policy".to_string());
 
-    let error = compile_snapshot(
+    let report = compile_snapshot(
         vec![provider()],
         vec![broken_model],
-        vec![api_key()],
+        vec![],
         vec![policy()],
         1,
     )
-    .expect_err("unknown model policy should fail compilation");
+    .expect("unknown model policy should be skipped");
 
-    assert!(error.contains("missing policy reference: missing-policy"));
+    assert!(report.snapshot.models_by_name.is_empty());
+    assert!(report.snapshot.model_limits.is_empty());
+    assert_eq!(report.issues.len(), 1);
+    assert_eq!(report.issues[0].kind, "model");
+    assert_eq!(report.issues[0].id, "gpt-4o-mini");
+    assert_eq!(
+        report.issues[0].reason,
+        "missing policy reference: missing-policy"
+    );
 }
 
 #[test]
-fn compile_snapshot_rejects_unknown_provider_policy() {
+fn compile_snapshot_skips_providers_with_unknown_policy() {
     let mut broken_provider = provider();
     broken_provider.policy_id = Some("missing-policy".to_string());
 
-    let error = compile_snapshot(
+    let report = compile_snapshot(
         vec![broken_provider],
         vec![model()],
-        vec![api_key()],
+        vec![],
         vec![policy()],
         1,
     )
-    .expect_err("unknown provider policy should fail compilation");
+    .expect("unknown provider policy should be skipped");
 
-    assert!(error.contains("missing policy reference: missing-policy"));
+    assert!(report.snapshot.providers_by_id.is_empty());
+    assert!(report.snapshot.models_by_name.is_empty());
+    assert_eq!(report.issues.len(), 2);
+    assert_eq!(report.issues[0].kind, "provider");
+    assert_eq!(report.issues[0].id, "provider-1");
+    assert_eq!(
+        report.issues[0].reason,
+        "missing policy reference: missing-policy"
+    );
+    assert_eq!(report.issues[1].kind, "model");
+    assert_eq!(report.issues[1].id, "gpt-4o-mini");
+    assert_eq!(
+        report.issues[1].reason,
+        "missing provider reference: provider-1"
+    );
+}
+
+#[test]
+fn compile_snapshot_cascades_invalidation_without_retaining_old_dependents() {
+    let mut broken_provider = provider();
+    broken_provider.policy_id = Some("missing-policy".to_string());
+
+    let mut broken_model = model();
+    broken_model.id = "broken-model".to_string();
+
+    let mut broken_key = api_key();
+    broken_key.id = "broken-key".to_string();
+    broken_key.key = "sk-broken".to_string();
+    broken_key.allowed_models = vec!["broken-model".to_string()];
+
+    let report = compile_snapshot(
+        vec![broken_provider],
+        vec![broken_model],
+        vec![broken_key],
+        vec![policy()],
+        3,
+    )
+    .expect("invalid dependency chain should be reported and skipped");
+
+    assert!(report.snapshot.providers_by_id.is_empty());
+    assert!(report.snapshot.models_by_name.is_empty());
+    assert!(report.snapshot.apikeys_by_id.is_empty());
+    assert!(report.snapshot.keys_by_token.is_empty());
+    assert_eq!(report.issues.len(), 3);
+    assert_eq!(report.issues[0].kind, "provider");
+    assert_eq!(report.issues[0].id, "provider-1");
+    assert_eq!(
+        report.issues[0].reason,
+        "missing policy reference: missing-policy"
+    );
+    assert_eq!(report.issues[1].kind, "model");
+    assert_eq!(report.issues[1].id, "broken-model");
+    assert_eq!(
+        report.issues[1].reason,
+        "missing provider reference: provider-1"
+    );
+    assert_eq!(report.issues[2].kind, "api key");
+    assert_eq!(report.issues[2].id, "broken-key");
+    assert_eq!(
+        report.issues[2].reason,
+        "missing model reference: broken-model"
+    );
+}
+
+#[test]
+fn compile_snapshot_aggregates_multiple_independent_issues_while_keeping_valid_resources() {
+    let mut broken_provider = provider();
+    broken_provider.id = "provider-broken".to_string();
+    broken_provider.policy_id = Some("missing-policy".to_string());
+
+    let mut broken_model = model();
+    broken_model.id = "broken-model".to_string();
+    broken_model.provider_id = "missing-provider".to_string();
+
+    let mut broken_key = api_key();
+    broken_key.id = "broken-key".to_string();
+    broken_key.key = "sk-broken".to_string();
+    broken_key.allowed_models = vec!["missing-model".to_string()];
+
+    let report = compile_snapshot(
+        vec![provider(), broken_provider],
+        vec![model(), broken_model],
+        vec![api_key(), broken_key],
+        vec![policy()],
+        8,
+    )
+    .expect("independent invalid resources should be aggregated and skipped");
+
+    assert!(report.snapshot.providers_by_id.contains_key("provider-1"));
+    assert!(report.snapshot.models_by_name.contains_key("gpt-4o-mini"));
+    assert!(report.snapshot.keys_by_token.contains_key("sk-test"));
+    assert!(!report
+        .snapshot
+        .providers_by_id
+        .contains_key("provider-broken"));
+    assert!(!report.snapshot.models_by_name.contains_key("broken-model"));
+    assert!(!report.snapshot.keys_by_token.contains_key("sk-broken"));
+    assert_eq!(report.issues.len(), 3);
+    assert_eq!(report.issues[0].kind, "provider");
+    assert_eq!(report.issues[0].id, "provider-broken");
+    assert_eq!(
+        report.issues[0].reason,
+        "missing policy reference: missing-policy"
+    );
+    assert_eq!(report.issues[1].kind, "model");
+    assert_eq!(report.issues[1].id, "broken-model");
+    assert_eq!(
+        report.issues[1].reason,
+        "missing provider reference: missing-provider"
+    );
+    assert_eq!(report.issues[2].kind, "api key");
+    assert_eq!(report.issues[2].id, "broken-key");
+    assert_eq!(
+        report.issues[2].reason,
+        "missing model reference: missing-model"
+    );
 }

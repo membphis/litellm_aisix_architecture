@@ -40,7 +40,7 @@ fn init_with_state(
 
 fn global_init_state() -> &'static InitCell {
     static INIT_STATE: OnceLock<InitCell> = OnceLock::new();
-    &INIT_STATE.get_or_init(InitCell::default)
+    INIT_STATE.get_or_init(InitCell::default)
 }
 
 fn build_effective_config(level: &str) -> TracingConfig {

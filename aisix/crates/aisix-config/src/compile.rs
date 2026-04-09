@@ -5,18 +5,46 @@ use aisix_types::entities::KeyMeta;
 use crate::etcd_model::{ApiKeyConfig, ModelConfig, PolicyConfig, ProviderConfig};
 use crate::snapshot::{CompiledSnapshot, ResolvedLimits};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompileIssue {
+    pub kind: &'static str,
+    pub id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotCompileReport {
+    pub snapshot: CompiledSnapshot,
+    pub issues: Vec<CompileIssue>,
+}
+
 pub fn compile_snapshot(
     providers: Vec<ProviderConfig>,
     models: Vec<ModelConfig>,
     apikeys: Vec<ApiKeyConfig>,
     policies: Vec<PolicyConfig>,
     revision: i64,
-) -> Result<CompiledSnapshot, String> {
+) -> Result<SnapshotCompileReport, String> {
     let policies_by_id = collect_unique_by_id(policies, "policy")?;
+    ensure_unique_ids(&providers, "provider")?;
+    ensure_unique_ids(&models, "model")?;
+    ensure_unique_ids(&apikeys, "api key")?;
+    ensure_unique_api_key_tokens(&apikeys)?;
 
+    let mut issues = Vec::new();
+    let mut providers_by_id = HashMap::new();
     let mut provider_limits = HashMap::new();
-    for provider in &providers {
-        validate_policy_reference(provider.policy_id.as_deref(), &policies_by_id)?;
+    for provider in providers {
+        if let Some(reason) = missing_policy_reason(provider.policy_id.as_deref(), &policies_by_id)
+        {
+            issues.push(CompileIssue {
+                kind: "provider",
+                id: provider.id,
+                reason,
+            });
+            continue;
+        }
+
         provider_limits.insert(
             provider.id.clone(),
             resolve_limits(
@@ -25,16 +53,30 @@ pub fn compile_snapshot(
                 &policies_by_id,
             )?,
         );
+        providers_by_id.insert(provider.id.clone(), provider);
     }
 
-    let providers_by_id = collect_unique_by_id(providers, "provider")?;
-
+    let mut models_by_name = HashMap::new();
     let mut model_limits = HashMap::new();
-    for model in &models {
+    for model in models {
         if !providers_by_id.contains_key(&model.provider_id) {
-            return Err(format!("missing provider reference: {}", model.provider_id));
+            issues.push(CompileIssue {
+                kind: "model",
+                id: model.id,
+                reason: format!("missing provider reference: {}", model.provider_id),
+            });
+            continue;
         }
-        validate_policy_reference(model.policy_id.as_deref(), &policies_by_id)?;
+
+        if let Some(reason) = missing_policy_reason(model.policy_id.as_deref(), &policies_by_id) {
+            issues.push(CompileIssue {
+                kind: "model",
+                id: model.id,
+                reason,
+            });
+            continue;
+        }
+
         model_limits.insert(
             model.id.clone(),
             resolve_limits(
@@ -43,21 +85,35 @@ pub fn compile_snapshot(
                 &policies_by_id,
             )?,
         );
+        models_by_name.insert(model.id.clone(), model);
     }
 
-    let models_by_name = collect_unique_by_id(models, "model")?;
-
-    let apikeys_by_id = collect_unique_by_id(apikeys, "api key")?;
+    let mut apikeys_by_id = HashMap::new();
     let mut keys_by_token = HashMap::new();
     let mut key_limits = HashMap::new();
 
-    for api_key in apikeys_by_id.values() {
-        for model_name in &api_key.allowed_models {
-            if !models_by_name.contains_key(model_name) {
-                return Err(format!("missing model reference: {model_name}"));
-            }
+    for api_key in apikeys {
+        if let Some(model_name) = api_key
+            .allowed_models
+            .iter()
+            .find(|model_name| !models_by_name.contains_key(*model_name))
+        {
+            issues.push(CompileIssue {
+                kind: "api key",
+                id: api_key.id,
+                reason: format!("missing model reference: {model_name}"),
+            });
+            continue;
         }
-        validate_policy_reference(api_key.policy_id.as_deref(), &policies_by_id)?;
+
+        if let Some(reason) = missing_policy_reason(api_key.policy_id.as_deref(), &policies_by_id) {
+            issues.push(CompileIssue {
+                kind: "api key",
+                id: api_key.id,
+                reason,
+            });
+            continue;
+        }
 
         let resolved_limits = resolve_limits(
             api_key.rate_limit.as_ref(),
@@ -66,11 +122,8 @@ pub fn compile_snapshot(
         )?;
 
         let token = api_key.key.clone();
-        if keys_by_token.contains_key(&token) {
-            return Err("duplicate api key token".to_string());
-        }
-
         key_limits.insert(api_key.id.clone(), resolved_limits);
+        apikeys_by_id.insert(api_key.id.clone(), api_key.clone());
         let previous = keys_by_token.insert(
             token.clone(),
             KeyMeta {
@@ -85,16 +138,19 @@ pub fn compile_snapshot(
         debug_assert!(previous.is_none());
     }
 
-    Ok(CompiledSnapshot {
-        revision,
-        keys_by_token,
-        apikeys_by_id,
-        providers_by_id,
-        models_by_name,
-        policies_by_id,
-        provider_limits,
-        model_limits,
-        key_limits,
+    Ok(SnapshotCompileReport {
+        snapshot: CompiledSnapshot {
+            revision,
+            keys_by_token,
+            apikeys_by_id,
+            providers_by_id,
+            models_by_name,
+            policies_by_id,
+            provider_limits,
+            model_limits,
+            key_limits,
+        },
+        issues,
     })
 }
 
@@ -107,7 +163,7 @@ fn resolve_limits(
         Some(policy_id) => {
             let policy = policies_by_id
                 .get(policy_id)
-                .ok_or_else(|| format!("missing policy: {policy_id}"))?;
+                .ok_or_else(|| format!("missing policy reference: {policy_id}"))?;
             ResolvedLimits::from(&policy.rate_limit)
         }
         None => ResolvedLimits {
@@ -130,6 +186,34 @@ fn resolve_limits(
     }
 
     Ok(resolved)
+}
+
+fn ensure_unique_ids<T>(items: &[T], kind: &str) -> Result<(), String>
+where
+    T: HasConfigId,
+{
+    let mut seen = HashMap::new();
+
+    for item in items {
+        let id = item.config_id().to_string();
+        if seen.insert(id.clone(), ()).is_some() {
+            return Err(format!("duplicate {kind} id: {id}"));
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_unique_api_key_tokens(apikeys: &[ApiKeyConfig]) -> Result<(), String> {
+    let mut seen = HashMap::new();
+
+    for api_key in apikeys {
+        if seen.insert(api_key.key.clone(), ()).is_some() {
+            return Err("duplicate api key token".to_string());
+        }
+    }
+
+    Ok(())
 }
 
 fn collect_unique_by_id<T>(items: Vec<T>, kind: &str) -> Result<HashMap<String, T>, String>
@@ -176,15 +260,15 @@ impl HasConfigId for ApiKeyConfig {
     }
 }
 
-fn validate_policy_reference(
+fn missing_policy_reason(
     policy_id: Option<&str>,
     policies_by_id: &HashMap<String, PolicyConfig>,
-) -> Result<(), String> {
+) -> Option<String> {
     if let Some(policy_id) = policy_id {
         if !policies_by_id.contains_key(policy_id) {
-            return Err(format!("missing policy reference: {policy_id}"));
+            return Some(format!("missing policy reference: {policy_id}"));
         }
     }
 
-    Ok(())
+    None
 }

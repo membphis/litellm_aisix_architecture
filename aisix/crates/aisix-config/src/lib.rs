@@ -5,3 +5,5 @@ pub mod loader;
 pub mod snapshot;
 pub mod startup;
 pub mod watcher;
+
+pub use compile::{CompileIssue, SnapshotCompileReport};

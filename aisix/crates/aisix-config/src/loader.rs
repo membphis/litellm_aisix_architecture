@@ -1,9 +1,8 @@
 use serde::Serialize;
 
 use crate::{
-    compile::compile_snapshot,
+    compile::{compile_snapshot, SnapshotCompileReport},
     etcd_model::{ApiKeyConfig, ModelConfig, PolicyConfig, ProviderConfig},
-    snapshot::CompiledSnapshot,
 };
 
 trait HasConfigId {
@@ -29,7 +28,7 @@ pub fn compile_snapshot_from_entries(
     prefix: &str,
     entries: &[EtcdEntry],
     revision: i64,
-) -> Result<CompiledSnapshot, String> {
+) -> Result<SnapshotCompileReport, String> {
     let normalized_prefix = format!("{}/", prefix.trim_end_matches('/'));
     let mut providers = Vec::new();
     let mut models = Vec::new();
