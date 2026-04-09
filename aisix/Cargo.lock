@@ -57,6 +57,7 @@ dependencies = [
  "aisix-storage",
  "aisix-types",
  "arc-swap",
+ "serde_json",
  "uuid",
 ]
 
@@ -164,6 +165,7 @@ dependencies = [
  "tower 0.5.3",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
