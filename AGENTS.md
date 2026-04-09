@@ -71,5 +71,5 @@ bash aisix/scripts/smoke-phase1.sh
 
 - `aisix/README.md` — getting started guide with curl examples
 - `aisix/docs/admin-api.md` — Admin API reference (resources, semantics, error codes)
-- `docs/aisix-backend-architecture.md` — full architecture design doc (Chinese)
-- `docs/litellm-data-plane-panorama-20260403.md` — LiteLLM feature panorama used as reference baseline
+- `docs/architecture.md` — full architecture design doc (Chinese)
+- `docs/litellm-feature-panorama.md` — LiteLLM feature panorama used as reference baseline

@@ -4,7 +4,7 @@
 >
 > **命名灵感**：Apache APISIX —— 采用其数据面/控制面分离理念，但面向 AI/LLM 场景重新设计。
 >
-> **参考基准**：基于 [litellm-data-plane-panorama-20260403.md](./litellm-data-plane-panorama-20260403.md) 中 LiteLLM 的 14 大功能域进行对标设计。
+> **参考基准**：基于 [litellm-feature-panorama.md](./litellm-feature-panorama.md) 中 LiteLLM 的 14 大功能域进行对标设计。
 >
 > **文档版本**：2026-04-03
 
