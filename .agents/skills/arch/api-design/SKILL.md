@@ -212,7 +212,8 @@ Admin 写入先到 **etcd**。后台 watcher 异步应用变更。
 { "id": "openai", "path": "/aisix/providers/openai", "revision": 123 }
 ```
 
-允许乱序写入（例如先写 model 再写其 provider）。收敛在 watcher 层完成；依赖补齐后，后续 reload 会自动纳入该资源。
+> 允许乱序写入（例如先写 model 再写其 provider）。收敛在 watcher 层完成；依赖补齐后，后续 reload 会自动纳入该资源。
+修改为不允许乱序写入（必须先写 provider），会增加客户端复杂度（必须处理依赖关系），但简化服务器端实现（不需要 watcher 处理依赖补齐）。当前阶段选择允许乱序写入以降低集成门槛。
 
 ### 错误码
 
