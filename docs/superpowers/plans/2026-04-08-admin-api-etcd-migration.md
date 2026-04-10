@@ -169,23 +169,17 @@ fn compiles_snapshot_from_etcd_entries() {
             "id": "openai",
             "kind": "openai",
             "base_url": "https://api.openai.com",
-            "auth": { "secret_ref": "env:OPENAI_API_KEY" },
-            "policy_id": null,
-            "rate_limit": null
+            "auth": { "secret_ref": "env:OPENAI_API_KEY" }
         })),
         EtcdEntry::json("/aisix/models/gpt-4o-mini", &json!({
             "id": "gpt-4o-mini",
             "provider_id": "openai",
-            "upstream_model": "gpt-4o-mini",
-            "policy_id": null,
-            "rate_limit": null
+            "upstream_model": "gpt-4o-mini"
         })),
         EtcdEntry::json("/aisix/apikeys/demo", &json!({
             "id": "demo",
             "key": "sk-demo",
-            "allowed_models": ["gpt-4o-mini"],
-            "policy_id": null,
-            "rate_limit": null
+            "allowed_models": ["gpt-4o-mini"]
         })),
     ];
 
@@ -202,9 +196,7 @@ fn rejects_invalid_model_reference_from_etcd_entries() {
         EtcdEntry::json("/aisix/models/gpt-4o-mini", &json!({
             "id": "gpt-4o-mini",
             "provider_id": "missing-provider",
-            "upstream_model": "gpt-4o-mini",
-            "policy_id": null,
-            "rate_limit": null
+            "upstream_model": "gpt-4o-mini"
         })),
     ];
 
@@ -477,9 +469,7 @@ async fn watcher_reloads_snapshot_after_put() {
         "id": "openai",
         "kind": "openai",
         "base_url": "https://api.openai.com",
-        "auth": { "secret_ref": "env:OPENAI_API_KEY" },
-        "policy_id": null,
-        "rate_limit": null
+        "auth": { "secret_ref": "env:OPENAI_API_KEY" }
     })).await;
 
     let snapshot = aisix_config::watcher::initial_snapshot_handle(
@@ -495,9 +485,7 @@ async fn watcher_reloads_snapshot_after_put() {
     harness.put_json("/aisix/models/gpt-4o-mini", json!({
         "id": "gpt-4o-mini",
         "provider_id": "openai",
-        "upstream_model": "gpt-4o-mini",
-        "policy_id": null,
-        "rate_limit": null
+        "upstream_model": "gpt-4o-mini"
     })).await;
 
     wait_until(|| snapshot.load().models_by_name.contains_key("gpt-4o-mini")).await;

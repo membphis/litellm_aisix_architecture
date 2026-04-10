@@ -38,9 +38,7 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/providers/openai \
     "id": "openai",
     "kind": "openai",
     "base_url": "https://api.openai.com",
-    "auth": {"secret_ref": "env:OPENAI_API_KEY"},
-    "policy_id": null,
-    "rate_limit": null
+    "auth": {"secret_ref": "env:OPENAI_API_KEY"}
   }'
 ```
 
@@ -53,9 +51,7 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/models/gpt-4o-mini \
   -d '{
     "id": "gpt-4o-mini",
     "provider_id": "openai",
-    "upstream_model": "gpt-4o-mini",
-    "policy_id": null,
-    "rate_limit": null
+    "upstream_model": "gpt-4o-mini"
   }'
 
 curl -fsS -X PUT http://127.0.0.1:4000/admin/models/text-embedding-3-small \
@@ -64,9 +60,7 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/models/text-embedding-3-small \
   -d '{
     "id": "text-embedding-3-small",
     "provider_id": "openai",
-    "upstream_model": "text-embedding-3-small",
-    "policy_id": null,
-    "rate_limit": null
+    "upstream_model": "text-embedding-3-small"
   }'
 ```
 
@@ -79,9 +73,7 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/apikeys/demo-key \
   -d '{
     "id": "demo-key",
     "key": "sk-demo-phase1",
-    "allowed_models": ["gpt-4o-mini", "text-embedding-3-small"],
-    "policy_id": null,
-    "rate_limit": null
+    "allowed_models": ["gpt-4o-mini", "text-embedding-3-small"]
   }'
 ```
 

@@ -81,17 +81,13 @@ Example `GET /admin/providers` response:
     "id": "anthropic",
     "kind": "anthropic",
     "base_url": "https://api.anthropic.com",
-    "auth": { "secret_ref": "env:ANTHROPIC_API_KEY" },
-    "policy_id": null,
-    "rate_limit": null
+    "auth": { "secret_ref": "env:ANTHROPIC_API_KEY" }
   },
   {
     "id": "openai",
     "kind": "openai",
     "base_url": "https://api.openai.com",
-    "auth": { "secret_ref": "env:OPENAI_API_KEY" },
-    "policy_id": null,
-    "rate_limit": null
+    "auth": { "secret_ref": "env:OPENAI_API_KEY" }
   }
 ]
 ```
@@ -127,9 +123,7 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/providers/openai \
     "id": "openai",
     "kind": "openai",
     "base_url": "https://api.openai.com",
-    "auth": {"secret_ref": "env:OPENAI_API_KEY"},
-    "policy_id": null,
-    "rate_limit": null
+    "auth": {"secret_ref": "env:OPENAI_API_KEY"}
   }'
 ```
 
@@ -151,9 +145,7 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/models/gpt-4o-mini \
   -d '{
     "id": "gpt-4o-mini",
     "provider_id": "openai",
-    "upstream_model": "gpt-4o-mini",
-    "policy_id": null,
-    "rate_limit": null
+    "upstream_model": "gpt-4o-mini"
   }'
 ```
 
@@ -192,9 +184,7 @@ curl -fsS -X DELETE http://127.0.0.1:4000/admin/apikeys/demo-key \
   "id": "openai",
   "kind": "openai",
   "base_url": "https://api.openai.com",
-  "auth": { "secret_ref": "env:OPENAI_API_KEY" },
-  "policy_id": null,
-  "rate_limit": null
+  "auth": { "secret_ref": "env:OPENAI_API_KEY" }
 }
 ```
 
@@ -204,9 +194,7 @@ curl -fsS -X DELETE http://127.0.0.1:4000/admin/apikeys/demo-key \
 {
   "id": "gpt-4o-mini",
   "provider_id": "openai",
-  "upstream_model": "gpt-4o-mini",
-  "policy_id": null,
-  "rate_limit": null
+  "upstream_model": "gpt-4o-mini"
 }
 ```
 
@@ -216,9 +204,7 @@ curl -fsS -X DELETE http://127.0.0.1:4000/admin/apikeys/demo-key \
 {
   "id": "demo-key",
   "key": "sk-demo-phase1",
-  "allowed_models": ["gpt-4o-mini"],
-  "policy_id": null,
-  "rate_limit": null
+  "allowed_models": ["gpt-4o-mini"]
 }
 ```
 
@@ -228,9 +214,7 @@ curl -fsS -X DELETE http://127.0.0.1:4000/admin/apikeys/demo-key \
 {
   "id": "default",
   "rate_limit": {
-    "rpm": 60,
-    "tpm": null,
-    "concurrency": null
+    "rpm": 60
   }
 }
 ```

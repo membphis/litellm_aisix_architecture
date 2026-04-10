@@ -305,9 +305,7 @@ fn skips_key_and_payload_id_mismatches() {
                 "id": "anthropic",
                 "kind": "openai",
                 "base_url": "https://api.openai.com",
-                "auth": { "secret_ref": "env:OPENAI_API_KEY" },
-                "policy_id": null,
-                "rate_limit": null
+                "auth": { "secret_ref": "env:OPENAI_API_KEY" }
             }),
         ),
         EtcdEntry::json(
@@ -316,9 +314,7 @@ fn skips_key_and_payload_id_mismatches() {
                 "id": "anthropic",
                 "kind": "anthropic",
                 "base_url": "https://api.anthropic.com",
-                "auth": { "secret_ref": "env:ANTHROPIC_API_KEY" },
-                "policy_id": null,
-                "rate_limit": null
+                "auth": { "secret_ref": "env:ANTHROPIC_API_KEY" }
             }),
         ),
     ];
@@ -505,9 +501,7 @@ async fn watcher_applies_unrelated_valid_updates_while_invalid_model_is_skipped(
                 "id": "openai",
                 "kind": "openai",
                 "base_url": "https://api.openai.com",
-                "auth": { "secret_ref": "env:OPENAI_API_KEY" },
-                "policy_id": null,
-                "rate_limit": null
+                "auth": { "secret_ref": "env:OPENAI_API_KEY" }
             }),
         )
         .await
@@ -548,9 +542,7 @@ async fn watcher_applies_unrelated_valid_updates_while_invalid_model_is_skipped(
             &json!({
                 "id": "broken-model",
                 "provider_id": "missing-provider",
-                "upstream_model": "broken-model",
-                "policy_id": null,
-                "rate_limit": null
+                "upstream_model": "broken-model"
             }),
         )
         .await
@@ -561,9 +553,7 @@ async fn watcher_applies_unrelated_valid_updates_while_invalid_model_is_skipped(
             &json!({
                 "id": "gpt-4o-mini",
                 "provider_id": "openai",
-                "upstream_model": "gpt-4o-mini",
-                "policy_id": null,
-                "rate_limit": null
+                "upstream_model": "gpt-4o-mini"
             }),
         )
         .await
@@ -656,9 +646,7 @@ async fn watcher_revision_advances_after_partial_reload_success() {
                 "id": "openai",
                 "kind": "openai",
                 "base_url": "https://api.openai.com",
-                "auth": { "secret_ref": "env:OPENAI_API_KEY" },
-                "policy_id": null,
-                "rate_limit": null
+                "auth": { "secret_ref": "env:OPENAI_API_KEY" }
             }),
         )
         .await
@@ -699,9 +687,7 @@ async fn watcher_revision_advances_after_partial_reload_success() {
             &json!({
                 "id": "broken-model",
                 "provider_id": "missing-provider",
-                "upstream_model": "broken-model",
-                "policy_id": null,
-                "rate_limit": null
+                "upstream_model": "broken-model"
             }),
         )
         .await

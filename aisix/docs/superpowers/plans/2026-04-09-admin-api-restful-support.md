@@ -282,9 +282,7 @@ async fn admin_can_list_providers_and_models_in_id_order() {
                 "id": "z-openai",
                 "kind": "openai",
                 "base_url": "https://z.example.com",
-                "auth": {"secret_ref": "env:OPENAI_API_KEY"},
-                "policy_id": null,
-                "rate_limit": null
+                "auth": {"secret_ref": "env:OPENAI_API_KEY"}
             }),
         ))
         .await
@@ -296,9 +294,7 @@ async fn admin_can_list_providers_and_models_in_id_order() {
                 "id": "a-openai",
                 "kind": "openai",
                 "base_url": "https://a.example.com",
-                "auth": {"secret_ref": "env:OPENAI_API_KEY"},
-                "policy_id": null,
-                "rate_limit": null
+                "auth": {"secret_ref": "env:OPENAI_API_KEY"}
             }),
         ))
         .await
@@ -516,7 +512,7 @@ async fn admin_can_get_apikey_and_policy_by_id() {
             "/admin/policies/default",
             json!({
                 "id": "default",
-                "rate_limit": {"rpm": 10, "tpm": null, "concurrency": null}
+                "rate_limit": {"rpm": 10}
             }),
         ))
         .await
@@ -528,8 +524,7 @@ async fn admin_can_get_apikey_and_policy_by_id() {
                 "id": "demo",
                 "key": "live-token",
                 "allowed_models": ["gpt-4o-mini"],
-                "policy_id": "default",
-                "rate_limit": null
+                "policy_id": "default"
             }),
         ))
         .await
@@ -559,7 +554,7 @@ async fn admin_can_list_apikeys_and_policies_in_id_order() {
             "/admin/policies/z-policy",
             json!({
                 "id": "z-policy",
-                "rate_limit": {"rpm": 20, "tpm": null, "concurrency": null}
+                "rate_limit": {"rpm": 20}
             }),
         ))
         .await
@@ -569,7 +564,7 @@ async fn admin_can_list_apikeys_and_policies_in_id_order() {
             "/admin/policies/a-policy",
             json!({
                 "id": "a-policy",
-                "rate_limit": {"rpm": 10, "tpm": null, "concurrency": null}
+                "rate_limit": {"rpm": 10}
             }),
         ))
         .await
@@ -592,7 +587,7 @@ async fn admin_can_delete_apikey_and_policy() {
             "/admin/policies/default",
             json!({
                 "id": "default",
-                "rate_limit": {"rpm": 10, "tpm": null, "concurrency": null}
+                "rate_limit": {"rpm": 10}
             }),
         ))
         .await
@@ -604,8 +599,7 @@ async fn admin_can_delete_apikey_and_policy() {
                 "id": "demo",
                 "key": "live-token",
                 "allowed_models": ["gpt-4o-mini"],
-                "policy_id": "default",
-                "rate_limit": null
+                "policy_id": "default"
             }),
         ))
         .await
@@ -796,9 +790,7 @@ async fn admin_delete_removes_the_stored_key_from_etcd() {
                 "id": "openai",
                 "kind": "openai",
                 "base_url": "https://api.openai.com",
-                "auth": {"secret_ref": "env:OPENAI_API_KEY"},
-                "policy_id": null,
-                "rate_limit": null
+                "auth": {"secret_ref": "env:OPENAI_API_KEY"}
             }),
         ))
         .await

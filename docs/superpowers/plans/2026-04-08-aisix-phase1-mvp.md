@@ -1711,21 +1711,21 @@ cargo run -p aisix-gateway -- config/aisix-gateway.example.yaml
 curl -X POST http://127.0.0.1:4000/admin/providers \
   -H 'x-admin-key: aisix-admin' \
   -H 'content-type: application/json' \
-  -d '{"id":"openai","kind":"OpenAi","base_url":"https://api.openai.com","auth":{"secret_ref":"env:OPENAI_API_KEY"},"policy_id":null}'
+  -d '{"id":"openai","kind":"OpenAi","base_url":"https://api.openai.com","auth":{"secret_ref":"env:OPENAI_API_KEY"}}'
 ```
 
 ```bash
 curl -X POST http://127.0.0.1:4000/admin/models \
   -H 'x-admin-key: aisix-admin' \
   -H 'content-type: application/json' \
-  -d '{"id":"gpt-4o-mini","provider_id":"openai","upstream_model":"gpt-4.1-mini","policy_id":null}'
+  -d '{"id":"gpt-4o-mini","provider_id":"openai","upstream_model":"gpt-4.1-mini"}'
 ```
 
 ```bash
 curl -X POST http://127.0.0.1:4000/admin/apikeys \
   -H 'x-admin-key: aisix-admin' \
   -H 'content-type: application/json' \
-  -d '{"id":"key-1","key":"sk-valid","allowed_models":["gpt-4o-mini"],"policy_id":null,"rate_limit":{"rpm":100,"tpm":10000,"concurrency":5}}'
+  -d '{"id":"key-1","key":"sk-valid","allowed_models":["gpt-4o-mini"],"rate_limit":{"rpm":100,"tpm":10000,"concurrency":5}}'
 ```
 
 ## Call chat completions
@@ -1761,7 +1761,7 @@ curl -fsS "$BASE_URL/ready" >/dev/null
 curl -fsS -X POST "$BASE_URL/admin/providers" \
   -H 'x-admin-key: aisix-admin' \
   -H 'content-type: application/json' \
-  -d '{"id":"openai","kind":"OpenAi","base_url":"https://api.openai.com","auth":{"secret_ref":"env:OPENAI_API_KEY"},"policy_id":null}' >/dev/null
+  -d '{"id":"openai","kind":"OpenAi","base_url":"https://api.openai.com","auth":{"secret_ref":"env:OPENAI_API_KEY"}}' >/dev/null
 
 echo "phase1 smoke passed"
 ```
