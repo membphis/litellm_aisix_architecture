@@ -18,6 +18,9 @@ log:
 runtime:
   worker_threads: 1
 
+cache:
+  default: "disabled"
+
 deployment:
   admin:
     enabled: true

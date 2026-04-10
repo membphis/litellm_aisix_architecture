@@ -24,7 +24,9 @@ pub async fn chat_completions(
     route_select::resolve(&mut ctx, &state)?;
     let _rate_limit_guard = rate_limit::check(&ctx, &state).await?;
 
-    if ctx.request.transport_mode() == TransportMode::Json {
+    if ctx.request.transport_mode() == TransportMode::Json
+        && cache::cache_enabled_for_chat(&ctx, &state)?
+    {
         if let Some(response) = cache::lookup_chat(&mut ctx, &state)? {
             post_call::record_success(&ctx, &state).await;
             return Ok(response);

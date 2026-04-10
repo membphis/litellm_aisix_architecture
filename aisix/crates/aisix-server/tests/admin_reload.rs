@@ -48,6 +48,7 @@ async fn admin_can_create_provider_model_and_apikey_then_gateway_uses_reloaded_s
                     },
                     policy_id: None,
                     rate_limit: None,
+                    cache: None,
                 }),
             ))
             .await
@@ -64,6 +65,7 @@ async fn admin_can_create_provider_model_and_apikey_then_gateway_uses_reloaded_s
                     upstream_model: "gpt-4o-mini-2024-07-18".to_string(),
                     policy_id: None,
                     rate_limit: None,
+                    cache: None,
                 }),
             ))
             .await
@@ -177,6 +179,7 @@ async fn unrelated_admin_put_preserves_seeded_apikey_limit_config() {
                     },
                     policy_id: None,
                     rate_limit: None,
+                    cache: None,
                 }),
             ))
             .await
@@ -342,6 +345,7 @@ async fn admin_rejects_path_and_body_id_mismatch() {
                 },
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             }),
         ))
         .await
@@ -373,6 +377,7 @@ async fn admin_rejects_ids_with_path_separators() {
                 },
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             }),
         ))
         .await
@@ -401,6 +406,7 @@ async fn admin_put_persists_provider_in_etcd_and_returns_write_revision() {
                 },
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             }),
         ))
         .await
@@ -439,6 +445,7 @@ async fn admin_provider_get_list_and_delete_routes_use_live_etcd() {
                 },
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             }),
         )
         .await
@@ -456,6 +463,7 @@ async fn admin_provider_get_list_and_delete_routes_use_live_etcd() {
                 },
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             }),
         )
         .await
@@ -540,6 +548,7 @@ async fn admin_model_get_list_and_delete_routes_use_live_etcd() {
                 upstream_model: "z-upstream".to_string(),
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             }),
         )
         .await
@@ -554,6 +563,7 @@ async fn admin_model_get_list_and_delete_routes_use_live_etcd() {
                 upstream_model: "a-upstream".to_string(),
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             }),
         )
         .await
@@ -883,6 +893,7 @@ async fn admin_update_reloads_key_rate_limit_without_poisoning_current_snapshot(
                     upstream_model: "gpt-4o-mini-2024-07-18".to_string(),
                     policy_id: None,
                     rate_limit: None,
+                    cache: None,
                 }),
             ))
             .await
@@ -996,6 +1007,7 @@ async fn seed_valid_runtime_config_in_etcd(
                 },
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             }),
         )
         .await
@@ -1009,6 +1021,7 @@ async fn seed_valid_runtime_config_in_etcd(
                 upstream_model: "gpt-4o-mini-2024-07-18".to_string(),
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             }),
         )
         .await
@@ -1067,6 +1080,9 @@ fn test_startup_config(etcd: aisix_config::startup::EtcdConfig) -> aisix_config:
             level: "info".to_string(),
         },
         runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
+        cache: aisix_config::startup::CacheConfig {
+            default: aisix_config::startup::CacheDefaultMode::Disabled,
+        },
         deployment: aisix_config::startup::DeploymentConfig {
             admin: aisix_config::startup::AdminConfig {
                 enabled: true,

@@ -15,6 +15,7 @@ fn provider(id: &str, base_url: &str) -> ProviderConfig {
         },
         policy_id: None,
         rate_limit: None,
+        cache: None,
     }
 }
 

@@ -245,7 +245,7 @@ fn rebuilt_non_success_stream_responses_strip_stale_body_headers() {
 
 fn test_state(snapshot: CompiledSnapshot) -> aisix_server::app::ServerState {
     aisix_server::app::ServerState {
-        app: AppState::new(initial_snapshot_handle(snapshot), true),
+        app: AppState::new(initial_snapshot_handle(snapshot), true, false),
         providers: ProviderRegistry::default(),
         admin: None,
     }
@@ -262,6 +262,8 @@ fn snapshot_for_upstream(base_url: &str) -> CompiledSnapshot {
         provider_limits: Default::default(),
         model_limits: Default::default(),
         key_limits: Default::default(),
+        provider_cache_modes: Default::default(),
+        model_cache_modes: Default::default(),
     };
 
     snapshot.keys_by_token.insert(
@@ -286,6 +288,7 @@ fn snapshot_for_upstream(base_url: &str) -> CompiledSnapshot {
             },
             policy_id: None,
             rate_limit: None,
+            cache: None,
         },
     );
     snapshot.models_by_name.insert(
@@ -296,6 +299,7 @@ fn snapshot_for_upstream(base_url: &str) -> CompiledSnapshot {
             upstream_model: "gpt-4o-mini-2024-07-18".to_string(),
             policy_id: None,
             rate_limit: None,
+            cache: None,
         },
     );
 
@@ -313,6 +317,8 @@ fn snapshot_for_anthropic_upstream(base_url: &str) -> CompiledSnapshot {
         provider_limits: Default::default(),
         model_limits: Default::default(),
         key_limits: Default::default(),
+        provider_cache_modes: Default::default(),
+        model_cache_modes: Default::default(),
     };
 
     snapshot.keys_by_token.insert(
@@ -337,6 +343,7 @@ fn snapshot_for_anthropic_upstream(base_url: &str) -> CompiledSnapshot {
             },
             policy_id: None,
             rate_limit: None,
+            cache: None,
         },
     );
     snapshot.models_by_name.insert(
@@ -347,6 +354,7 @@ fn snapshot_for_anthropic_upstream(base_url: &str) -> CompiledSnapshot {
             upstream_model: "claude-3-5-haiku-latest".to_string(),
             policy_id: None,
             rate_limit: None,
+            cache: None,
         },
     );
 

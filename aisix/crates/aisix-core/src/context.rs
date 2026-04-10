@@ -81,6 +81,8 @@ mod tests {
                 provider_limits: Default::default(),
                 model_limits: Default::default(),
                 key_limits: Default::default(),
+                provider_cache_modes: Default::default(),
+                model_cache_modes: Default::default(),
             }),
         );
 

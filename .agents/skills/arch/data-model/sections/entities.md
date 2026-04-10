@@ -23,7 +23,8 @@
   "kind": "openai",
   "base_url": "https://api.openai.com",
   "auth": { "secret_ref": "env:OPENAI_API_KEY" },
-  "policy_id": "standard-tier"
+  "policy_id": "standard-tier",
+  "cache": { "mode": "enabled" }
 }
 ```
 
@@ -38,9 +39,14 @@
   "id": "gpt-4o-mini",
   "provider_id": "openai-us",
   "upstream_model": "gpt-4.1-mini",
-  "policy_id": "standard-tier"
+  "policy_id": "standard-tier",
+  "cache": { "mode": "inherit" }
 }
 ```
+
+- `cache.mode` 可选值：`inherit`、`enabled`、`disabled`
+- 未配置 `cache` 视为 `inherit`
+- `apikey` 与 `policy` 当前不承载缓存开关
 
 ### API Key
 

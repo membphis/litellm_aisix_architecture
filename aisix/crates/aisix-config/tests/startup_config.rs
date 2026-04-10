@@ -1,4 +1,4 @@
-use aisix_config::startup::load_from_path;
+use aisix_config::startup::{load_from_path, CacheDefaultMode};
 use std::fs;
 
 #[test]
@@ -11,6 +11,7 @@ fn loads_example_startup_config() {
 
     assert_eq!(config.server.listen, "0.0.0.0:4000");
     assert_eq!(config.etcd.prefix, "/aisix");
+    assert_eq!(config.cache.default, CacheDefaultMode::Disabled);
     assert!(config
         .deployment
         .admin
@@ -20,7 +21,7 @@ fn loads_example_startup_config() {
 }
 
 #[test]
-fn loads_disabled_admin_without_keys() {
+fn missing_cache_section_defaults_to_disabled() {
     let temp_dir = std::env::temp_dir();
     let path = temp_dir.join(format!("aisix-startup-config-{}.yaml", std::process::id()));
 
@@ -49,10 +50,9 @@ deployment:
     .expect("temporary config should be written");
 
     let config = load_from_path(path.to_str().expect("temp path should be valid utf-8"))
-        .expect("config without admin keys should load");
+        .expect("config without cache section should load");
 
-    assert!(!config.deployment.admin.enabled);
-    assert!(config.deployment.admin.admin_keys.is_empty());
+    assert_eq!(config.cache.default, CacheDefaultMode::Disabled);
 
     fs::remove_file(path).expect("temporary config should be cleaned up");
 }

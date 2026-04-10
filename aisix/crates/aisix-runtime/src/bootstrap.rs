@@ -1,6 +1,6 @@
 use anyhow::Result;
 use aisix_config::{
-    startup::StartupConfig,
+    startup::{CacheDefaultMode, StartupConfig},
     watcher::{initial_snapshot_handle, load_initial_snapshot, spawn_snapshot_watcher},
 };
 use aisix_core::AppState;
@@ -12,6 +12,7 @@ pub async fn bootstrap(config: &StartupConfig) -> Result<AppState> {
     let snapshot = load_initial_snapshot(config).await?;
     log_initial_snapshot_loaded(snapshot.revision);
     let snapshot = initial_snapshot_handle(snapshot);
+    let default_cache_enabled = matches!(config.cache.default, CacheDefaultMode::Enabled);
     let redis = RedisPool::from_url(&config.redis.url)?;
     log_redis_pool_initialized();
     let watcher = spawn_snapshot_watcher(config.etcd.clone(), snapshot.clone()).await?;
@@ -20,6 +21,7 @@ pub async fn bootstrap(config: &StartupConfig) -> Result<AppState> {
     Ok(AppState::with_redis_and_watcher(
         snapshot.clone(),
         true,
+        default_cache_enabled,
         Some(redis),
         Some(watcher),
     ))

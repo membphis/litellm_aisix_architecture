@@ -45,7 +45,7 @@ mod tests {
     fn resolve_populates_provider_and_upstream_model_on_context() {
         let snapshot = snapshot_for_route("https://example.invalid");
         let state = ServerState {
-            app: AppState::new(initial_snapshot_handle(snapshot.clone()), true),
+            app: AppState::new(initial_snapshot_handle(snapshot.clone()), true, false),
             providers: ProviderRegistry::default(),
             admin: None,
         };
@@ -88,6 +88,8 @@ mod tests {
             provider_limits: Default::default(),
             model_limits: Default::default(),
             key_limits: Default::default(),
+            provider_cache_modes: Default::default(),
+            model_cache_modes: Default::default(),
         };
 
         snapshot.providers_by_id.insert(
@@ -101,6 +103,7 @@ mod tests {
                 },
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             },
         );
         snapshot.models_by_name.insert(
@@ -111,6 +114,7 @@ mod tests {
                 upstream_model: "text-embedding-3-small-upstream".to_string(),
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             },
         );
 

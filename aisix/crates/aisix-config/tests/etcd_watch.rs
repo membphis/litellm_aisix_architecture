@@ -156,6 +156,9 @@ async fn watcher_partial_reload_drops_invalid_current_resources_and_keeps_valid_
             level: "info".to_string(),
         },
         runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
+        cache: aisix_config::startup::CacheConfig {
+            default: aisix_config::startup::CacheDefaultMode::Disabled,
+        },
         deployment: aisix_config::startup::DeploymentConfig {
             admin: aisix_config::startup::AdminConfig {
                 enabled: false,
@@ -242,6 +245,9 @@ async fn watcher_recovers_from_compacted_revision_with_full_reload() {
                 level: "info".to_string(),
             },
             runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
+            cache: aisix_config::startup::CacheConfig {
+                default: aisix_config::startup::CacheDefaultMode::Disabled,
+            },
             deployment: aisix_config::startup::DeploymentConfig {
                 admin: aisix_config::startup::AdminConfig {
                     enabled: false,
@@ -327,6 +333,9 @@ async fn watcher_reconnects_after_transient_reload_failure() {
             level: "info".to_string(),
         },
         runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
+        cache: aisix_config::startup::CacheConfig {
+            default: aisix_config::startup::CacheDefaultMode::Disabled,
+        },
         deployment: aisix_config::startup::DeploymentConfig {
             admin: aisix_config::startup::AdminConfig {
                 enabled: false,
@@ -424,6 +433,9 @@ async fn watcher_keeps_last_published_snapshot_on_hard_reload_failure_then_recov
             level: "info".to_string(),
         },
         runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
+        cache: aisix_config::startup::CacheConfig {
+            default: aisix_config::startup::CacheDefaultMode::Disabled,
+        },
         deployment: aisix_config::startup::DeploymentConfig {
             admin: aisix_config::startup::AdminConfig {
                 enabled: false,

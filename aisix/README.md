@@ -102,6 +102,21 @@ curl -fsS http://127.0.0.1:4000/v1/embeddings \
   }'
 ```
 
+## Cache Policy
+
+- Global default cache behavior is configured in `config/aisix-gateway.example.yaml` via `cache.default`.
+- Supported startup values are `enabled` and `disabled`.
+- The global default is `disabled` when omitted.
+- Provider and model resources may set `cache.mode` to `inherit`, `enabled`, or `disabled`.
+- Missing `cache` is treated as `inherit`.
+- Effective precedence is `model > provider > global default`.
+- Current response caching applies only to non-stream chat JSON requests.
+- When caching is disabled for the request, AISIX skips both cache lookup and cache store, and does not return `x-aisix-cache-hit`.
+- When caching is enabled but the request misses cache, AISIX returns `x-aisix-cache-hit: false`.
+- When caching is enabled and the request hits cache, AISIX returns `x-aisix-cache-hit: true`.
+- The current design does not support API key-level static cache switches.
+- The current design does not attach cache policy to `policy` resources.
+
 ## Smoke Script
 
 Run `./scripts/smoke-phase1.sh` after the gateway is up. It exercises the etcd-backed flow by checking health, writing one provider/model/apikey through the Admin API, and sending one chat request through the gateway. Admin success in that flow means the write reached etcd; the new config becomes active only after the background watcher reloads a successfully compiled snapshot.

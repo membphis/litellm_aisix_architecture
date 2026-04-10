@@ -1,7 +1,7 @@
 use aisix_config::compile::compile_snapshot;
 use aisix_config::etcd_model::{
-    ApiKeyConfig, ModelConfig, PolicyConfig, ProviderAuth, ProviderConfig, ProviderKind,
-    RateLimitConfig,
+    ApiKeyConfig, CacheMode, CachePolicyConfig, ModelConfig, PolicyConfig, ProviderAuth,
+    ProviderConfig, ProviderKind, RateLimitConfig,
 };
 
 fn provider() -> ProviderConfig {
@@ -14,6 +14,7 @@ fn provider() -> ProviderConfig {
         },
         policy_id: Some("policy-1".to_string()),
         rate_limit: None,
+        cache: None,
     }
 }
 
@@ -24,6 +25,7 @@ fn model() -> ModelConfig {
         upstream_model: "gpt-4o-mini".to_string(),
         policy_id: Some("policy-1".to_string()),
         rate_limit: None,
+        cache: None,
     }
 }
 
@@ -153,6 +155,52 @@ fn compile_snapshot_resolves_provider_and_model_limits() {
     assert_eq!(
         (model_limits.rpm, model_limits.tpm, model_limits.concurrency),
         (Some(100), Some(1000), Some(10))
+    );
+}
+
+#[test]
+fn compile_snapshot_defaults_missing_cache_to_inherit() {
+    let report = compile_snapshot(
+        vec![provider()],
+        vec![model()],
+        vec![api_key()],
+        vec![policy()],
+        1,
+    )
+    .expect("snapshot should compile");
+
+    assert_eq!(
+        report.snapshot.provider_cache_modes.get("provider-1"),
+        Some(&CacheMode::Inherit)
+    );
+    assert_eq!(
+        report.snapshot.model_cache_modes.get("gpt-4o-mini"),
+        Some(&CacheMode::Inherit)
+    );
+}
+
+#[test]
+fn compile_snapshot_records_explicit_cache_modes() {
+    let mut provider = provider();
+    provider.cache = Some(CachePolicyConfig {
+        mode: CacheMode::Enabled,
+    });
+
+    let mut model = model();
+    model.cache = Some(CachePolicyConfig {
+        mode: CacheMode::Disabled,
+    });
+
+    let report = compile_snapshot(vec![provider], vec![model], vec![], vec![policy()], 1)
+        .expect("snapshot should compile");
+
+    assert_eq!(
+        report.snapshot.provider_cache_modes.get("provider-1"),
+        Some(&CacheMode::Enabled)
+    );
+    assert_eq!(
+        report.snapshot.model_cache_modes.get("gpt-4o-mini"),
+        Some(&CacheMode::Disabled)
     );
 }
 

@@ -1,8 +1,8 @@
 mod support;
 
 use aisix_config::startup::{
-    AdminConfig, DeploymentConfig, EtcdConfig, LogConfig, RedisConfig, RuntimeConfig,
-    ServerConfig, StartupConfig,
+    AdminConfig, CacheConfig, CacheDefaultMode, DeploymentConfig, EtcdConfig, LogConfig,
+    RedisConfig, RuntimeConfig, ServerConfig, StartupConfig,
 };
 use serde_json::json;
 
@@ -26,6 +26,9 @@ async fn bootstrap_fails_when_etcd_is_unreachable() {
             level: "info".to_string(),
         },
         runtime: RuntimeConfig { worker_threads: 1 },
+        cache: CacheConfig {
+            default: CacheDefaultMode::Disabled,
+        },
         deployment: DeploymentConfig {
             admin: AdminConfig {
                 enabled: false,
@@ -101,6 +104,9 @@ async fn bootstrap_loads_initial_snapshot_from_etcd() {
             level: "info".to_string(),
         },
         runtime: RuntimeConfig { worker_threads: 1 },
+        cache: CacheConfig {
+            default: CacheDefaultMode::Disabled,
+        },
         deployment: DeploymentConfig {
             admin: AdminConfig {
                 enabled: false,
@@ -193,6 +199,9 @@ async fn bootstrap_loads_valid_subset_when_etcd_contains_dependency_invalid_reso
             level: "info".to_string(),
         },
         runtime: RuntimeConfig { worker_threads: 1 },
+        cache: CacheConfig {
+            default: CacheDefaultMode::Disabled,
+        },
         deployment: DeploymentConfig {
             admin: AdminConfig {
                 enabled: false,
@@ -259,6 +268,9 @@ async fn bootstrap_stops_watcher_when_last_state_is_dropped() {
             level: "info".to_string(),
         },
         runtime: RuntimeConfig { worker_threads: 1 },
+        cache: CacheConfig {
+            default: CacheDefaultMode::Disabled,
+        },
         deployment: DeploymentConfig {
             admin: AdminConfig {
                 enabled: false,

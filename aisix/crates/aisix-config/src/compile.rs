@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use aisix_types::entities::KeyMeta;
 
-use crate::etcd_model::{ApiKeyConfig, ModelConfig, PolicyConfig, ProviderConfig};
+use crate::etcd_model::{ApiKeyConfig, CacheMode, ModelConfig, PolicyConfig, ProviderConfig};
 use crate::snapshot::{CompiledSnapshot, ResolvedLimits};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +34,7 @@ pub fn compile_snapshot(
     let mut issues = Vec::new();
     let mut providers_by_id = HashMap::new();
     let mut provider_limits = HashMap::new();
+    let mut provider_cache_modes = HashMap::new();
     for provider in providers {
         if let Some(reason) = missing_policy_reason(provider.policy_id.as_deref(), &policies_by_id)
         {
@@ -44,6 +45,15 @@ pub fn compile_snapshot(
             });
             continue;
         }
+
+        provider_cache_modes.insert(
+            provider.id.clone(),
+            provider
+                .cache
+                .as_ref()
+                .map(|cache| cache.mode)
+                .unwrap_or(CacheMode::Inherit),
+        );
 
         provider_limits.insert(
             provider.id.clone(),
@@ -58,6 +68,7 @@ pub fn compile_snapshot(
 
     let mut models_by_name = HashMap::new();
     let mut model_limits = HashMap::new();
+    let mut model_cache_modes = HashMap::new();
     for model in models {
         if !providers_by_id.contains_key(&model.provider_id) {
             issues.push(CompileIssue {
@@ -76,6 +87,15 @@ pub fn compile_snapshot(
             });
             continue;
         }
+
+        model_cache_modes.insert(
+            model.id.clone(),
+            model
+                .cache
+                .as_ref()
+                .map(|cache| cache.mode)
+                .unwrap_or(CacheMode::Inherit),
+        );
 
         model_limits.insert(
             model.id.clone(),
@@ -149,6 +169,8 @@ pub fn compile_snapshot(
             provider_limits,
             model_limits,
             key_limits,
+            provider_cache_modes,
+            model_cache_modes,
         },
         issues,
     })

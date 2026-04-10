@@ -161,7 +161,7 @@ fn app_with_snapshot(snapshot: CompiledSnapshot) -> axum::Router {
 
 fn test_state(snapshot: CompiledSnapshot, ready: bool) -> aisix_server::app::ServerState {
     aisix_server::app::ServerState {
-        app: AppState::new(initial_snapshot_handle(snapshot), ready),
+        app: AppState::new(initial_snapshot_handle(snapshot), ready, false),
         providers: ProviderRegistry::default(),
         admin: None,
     }
@@ -178,6 +178,8 @@ fn empty_snapshot() -> CompiledSnapshot {
         provider_limits: Default::default(),
         model_limits: Default::default(),
         key_limits: Default::default(),
+        provider_cache_modes: Default::default(),
+        model_cache_modes: Default::default(),
     }
 }
 
@@ -205,6 +207,7 @@ fn auth_snapshot(expires_at: Option<chrono::DateTime<Utc>>, base_url: &str) -> C
             },
             policy_id: None,
             rate_limit: None,
+            cache: None,
         },
     );
     snapshot.models_by_name.insert(
@@ -215,6 +218,7 @@ fn auth_snapshot(expires_at: Option<chrono::DateTime<Utc>>, base_url: &str) -> C
             upstream_model: "gpt-4o-mini-2024-07-18".to_string(),
             policy_id: None,
             rate_limit: None,
+            cache: None,
         },
     );
     snapshot

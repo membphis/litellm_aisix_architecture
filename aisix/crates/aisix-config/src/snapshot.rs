@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use aisix_types::entities::KeyMeta;
 
-use crate::etcd_model::{ApiKeyConfig, ModelConfig, PolicyConfig, ProviderConfig, RateLimitConfig};
+use crate::etcd_model::{
+    ApiKeyConfig, CacheMode, ModelConfig, PolicyConfig, ProviderConfig, RateLimitConfig,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedLimits {
@@ -22,6 +24,8 @@ pub struct CompiledSnapshot {
     pub provider_limits: HashMap<String, ResolvedLimits>,
     pub model_limits: HashMap<String, ResolvedLimits>,
     pub key_limits: HashMap<String, ResolvedLimits>,
+    pub provider_cache_modes: HashMap<String, CacheMode>,
+    pub model_cache_modes: HashMap<String, CacheMode>,
 }
 
 impl From<&RateLimitConfig> for ResolvedLimits {

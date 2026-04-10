@@ -8,6 +8,7 @@
 2. 重复明文 API key 检测 → 两个 key 共享同一 `key` 则拒绝
 3. 外键/策略引用校验 → 引用缺失时跳过当前资源并记录 `CompileIssue`
 4. 限流解析 → 合并策略默认值与内联覆盖
+5. 缓存模式编译 → provider/model 的 `cache.mode` 编译为资源级快照映射；缺失时视为 `inherit`
 
 资源级语义：
 
@@ -20,3 +21,5 @@
 
 - 仅存在 `CompileIssue` 时，watcher 发布有效资源子集并记录日志
 - 出现硬错误（如 duplicate id / duplicate token）时，本次发布失败，旧快照继续生效
+
+运行时最终缓存开关不只取决于快照，还会结合启动配置中的全局默认值，按 `model > provider > global default` 解析。

@@ -75,7 +75,7 @@ async fn azure_embeddings_use_api_key_header() {
 
 fn test_state(snapshot: CompiledSnapshot) -> aisix_server::app::ServerState {
     aisix_server::app::ServerState {
-        app: AppState::new(initial_snapshot_handle(snapshot), true),
+        app: AppState::new(initial_snapshot_handle(snapshot), true, false),
         providers: ProviderRegistry::default(),
         admin: None,
     }
@@ -92,6 +92,8 @@ fn snapshot_for_upstream(base_url: &str, kind: ProviderKind) -> CompiledSnapshot
         provider_limits: Default::default(),
         model_limits: Default::default(),
         key_limits: Default::default(),
+        provider_cache_modes: Default::default(),
+        model_cache_modes: Default::default(),
     };
 
     snapshot.keys_by_token.insert(
@@ -116,6 +118,7 @@ fn snapshot_for_upstream(base_url: &str, kind: ProviderKind) -> CompiledSnapshot
             },
             policy_id: None,
             rate_limit: None,
+            cache: None,
         },
     );
     snapshot.models_by_name.insert(
@@ -126,6 +129,7 @@ fn snapshot_for_upstream(base_url: &str, kind: ProviderKind) -> CompiledSnapshot
             upstream_model: "text-embedding-3-small-upstream".to_string(),
             policy_id: None,
             rate_limit: None,
+            cache: None,
         },
     );
 

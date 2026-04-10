@@ -1,4 +1,5 @@
 use aisix_cache::{build_chat_cache_key, CachedChatResponse};
+use aisix_config::etcd_model::CacheMode;
 use aisix_core::RequestContext;
 use aisix_types::{
     error::{ErrorKind, GatewayError},
@@ -11,6 +12,53 @@ use axum::{
 };
 
 use crate::{app::ServerState, pipeline::response::build_json_response};
+
+pub fn cache_enabled_for_chat(
+    ctx: &RequestContext,
+    state: &ServerState,
+) -> Result<bool, GatewayError> {
+    let CanonicalRequest::Chat(chat_request) = &ctx.request else {
+        return Ok(false);
+    };
+
+    if chat_request.stream {
+        return Ok(false);
+    }
+
+    let model_mode = ctx
+        .snapshot
+        .model_cache_modes
+        .get(&chat_request.model)
+        .copied()
+        .unwrap_or(CacheMode::Inherit);
+
+    match model_mode {
+        CacheMode::Enabled => return Ok(true),
+        CacheMode::Disabled => return Ok(false),
+        CacheMode::Inherit => {}
+    }
+
+    let provider_id = ctx
+        .resolved_provider_id
+        .as_deref()
+        .ok_or_else(|| GatewayError {
+            kind: ErrorKind::Internal,
+            message: "resolved provider missing before cache decision".to_string(),
+        })?;
+
+    let provider_mode = ctx
+        .snapshot
+        .provider_cache_modes
+        .get(provider_id)
+        .copied()
+        .unwrap_or(CacheMode::Inherit);
+
+    match provider_mode {
+        CacheMode::Enabled => Ok(true),
+        CacheMode::Disabled => Ok(false),
+        CacheMode::Inherit => Ok(state.app.default_cache_enabled),
+    }
+}
 
 fn cache_key_for_chat(ctx: &RequestContext) -> Result<Option<String>, GatewayError> {
     let CanonicalRequest::Chat(chat_request) = &ctx.request else {
@@ -132,7 +180,7 @@ mod tests {
     fn lookup_chat_uses_request_snapshot_after_route_selection() {
         let snapshot_v1 = snapshot_for_cache(1, "openai", "gpt-4o-mini-2024-07-18");
         let state = ServerState {
-            app: AppState::new(initial_snapshot_handle(snapshot_v1.clone()), true),
+            app: AppState::new(initial_snapshot_handle(snapshot_v1.clone()), true, false),
             providers: ProviderRegistry::default(),
             admin: None,
         };
@@ -204,6 +252,8 @@ mod tests {
             provider_limits: Default::default(),
             model_limits: Default::default(),
             key_limits: Default::default(),
+            provider_cache_modes: Default::default(),
+            model_cache_modes: Default::default(),
         };
 
         snapshot.providers_by_id.insert(
@@ -217,6 +267,7 @@ mod tests {
                 },
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             },
         );
         snapshot.models_by_name.insert(
@@ -227,6 +278,7 @@ mod tests {
                 upstream_model: upstream_model.to_string(),
                 policy_id: None,
                 rate_limit: None,
+                cache: None,
             },
         );
 

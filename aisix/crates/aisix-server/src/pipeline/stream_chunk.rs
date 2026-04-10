@@ -40,13 +40,15 @@ pub async fn proxy(
 
     match ctx.request.transport_mode() {
         TransportMode::Json => {
+            let cache_enabled = cache::cache_enabled_for_chat(ctx, state)?;
             let output = codec
                 .execute_json(provider, upstream_model, &ctx.request)
                 .await?;
 
             if output.status.is_success() {
                 ctx.usage = output.usage.clone();
-                if matches!(&ctx.request, CanonicalRequest::Chat(chat_request) if !chat_request.stream)
+                if cache_enabled
+                    && matches!(&ctx.request, CanonicalRequest::Chat(chat_request) if !chat_request.stream)
                 {
                     cache::store_chat_success(
                         ctx,
@@ -58,7 +60,8 @@ pub async fn proxy(
             }
 
             let cache_hit = match &ctx.request {
-                CanonicalRequest::Chat(_) => Some("false"),
+                CanonicalRequest::Chat(_) if cache_enabled => Some("false"),
+                CanonicalRequest::Chat(_) => None,
                 CanonicalRequest::Embeddings(_) => None,
             };
 

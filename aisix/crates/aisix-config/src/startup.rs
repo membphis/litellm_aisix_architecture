@@ -8,7 +8,32 @@ pub struct StartupConfig {
     pub redis: RedisConfig,
     pub log: LogConfig,
     pub runtime: RuntimeConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
     pub deployment: DeploymentConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CacheConfig {
+    #[serde(default)]
+    pub default: CacheDefaultMode,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            default: CacheDefaultMode::Disabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+pub enum CacheDefaultMode {
+    #[serde(rename = "enabled")]
+    Enabled,
+    #[default]
+    #[serde(rename = "disabled")]
+    Disabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

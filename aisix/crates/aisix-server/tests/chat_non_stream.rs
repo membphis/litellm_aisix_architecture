@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use aisix_config::{
-    etcd_model::{ModelConfig, ProviderAuth, ProviderConfig, ProviderKind},
+    etcd_model::{CacheMode, CachePolicyConfig, ModelConfig, ProviderAuth, ProviderConfig, ProviderKind},
     snapshot::CompiledSnapshot,
     watcher::initial_snapshot_handle,
 };
@@ -32,6 +32,7 @@ async fn chat_non_stream_proxies_openai_compatible_json() {
         let app = aisix_server::app::build_router(test_state(
             snapshot_for_upstream(&upstream.base_url),
             true,
+            false,
         ));
 
         app.oneshot(chat_request()).await.unwrap()
@@ -69,6 +70,7 @@ async fn azure_chat_json_path_uses_api_key_header() {
         let app = aisix_server::app::build_router(test_state(
             snapshot_for_upstream_kind(&upstream.base_url, ProviderKind::AzureOpenAi),
             true,
+            false,
         ));
 
         app.oneshot(chat_request()).await.unwrap()
@@ -90,6 +92,7 @@ async fn chat_response_uses_provider_config_id_and_preserves_usage() {
         let app = aisix_server::app::build_router(test_state(
             snapshot_for_provider_id(&upstream.base_url, ProviderKind::OpenAi, "openai-primary"),
             true,
+            false,
         ));
 
         app.oneshot(chat_request()).await.unwrap()
@@ -121,7 +124,7 @@ async fn repeated_non_stream_chat_hits_memory_cache() {
 
     let (state, first, second) =
         with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-            let state = test_state(snapshot_for_upstream(&upstream.base_url), true);
+            let state = test_state(snapshot_for_upstream(&upstream.base_url), true, true);
             let app = aisix_server::app::build_router(state.clone());
 
             let first = app.clone().oneshot(chat_request()).await.unwrap();
@@ -189,6 +192,7 @@ async fn cache_entry_is_invalidated_when_snapshot_config_changes() {
         let state = test_state(
             snapshot_for_model_target(&upstream.base_url, 1, "openai", "gpt-4o-mini-2024-07-18"),
             true,
+            true,
         );
         let app = aisix_server::app::build_router(state.clone());
 
@@ -238,9 +242,88 @@ async fn cache_entry_is_invalidated_when_snapshot_config_changes() {
     assert_eq!(capture.model(), Some("gpt-4o-mini-2024-08-01".to_string()));
 }
 
-fn test_state(snapshot: CompiledSnapshot, ready: bool) -> aisix_server::app::ServerState {
+#[tokio::test]
+async fn non_stream_chat_skips_cache_when_globally_disabled_and_resources_inherit() {
+    let capture = Arc::new(CapturedRequest::default());
+    let upstream = spawn_openai_mock(capture.clone()).await;
+
+    let (first, second) = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
+        let state = test_state(snapshot_for_upstream(&upstream.base_url), true, false);
+        let app = aisix_server::app::build_router(state);
+
+        let first = app.clone().oneshot(chat_request()).await.unwrap();
+        let second = app.oneshot(chat_request()).await.unwrap();
+
+        (first, second)
+    })
+    .await;
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+    assert!(first.headers().get("x-aisix-cache-hit").is_none());
+    assert!(second.headers().get("x-aisix-cache-hit").is_none());
+    assert_eq!(capture.hits(), 2);
+}
+
+#[tokio::test]
+async fn non_stream_chat_hits_cache_when_globally_enabled_and_resources_inherit() {
+    let capture = Arc::new(CapturedRequest::default());
+    let upstream = spawn_openai_mock(capture.clone()).await;
+
+    let (first, second) = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
+        let state = test_state(snapshot_for_upstream(&upstream.base_url), true, true);
+        let app = aisix_server::app::build_router(state);
+
+        let first = app.clone().oneshot(chat_request()).await.unwrap();
+        let second = app.oneshot(chat_request()).await.unwrap();
+
+        (first, second)
+    })
+    .await;
+
+    assert_eq!(
+        first.headers().get("x-aisix-cache-hit").and_then(|v| v.to_str().ok()),
+        Some("false")
+    );
+    assert_eq!(
+        second.headers().get("x-aisix-cache-hit").and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+    assert_eq!(capture.hits(), 1);
+}
+
+#[tokio::test]
+async fn model_cache_mode_overrides_provider_cache_mode() {
+    let capture = Arc::new(CapturedRequest::default());
+    let upstream = spawn_openai_mock(capture.clone()).await;
+
+    let (first, second) = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
+        let state = test_state(
+            snapshot_for_cache_modes(&upstream.base_url, Some(CacheMode::Enabled), Some(CacheMode::Disabled)),
+            true,
+            false,
+        );
+        let app = aisix_server::app::build_router(state);
+
+        let first = app.clone().oneshot(chat_request()).await.unwrap();
+        let second = app.oneshot(chat_request()).await.unwrap();
+
+        (first, second)
+    })
+    .await;
+
+    assert!(first.headers().get("x-aisix-cache-hit").is_none());
+    assert!(second.headers().get("x-aisix-cache-hit").is_none());
+    assert_eq!(capture.hits(), 2);
+}
+
+fn test_state(
+    snapshot: CompiledSnapshot,
+    ready: bool,
+    default_cache_enabled: bool,
+) -> aisix_server::app::ServerState {
     aisix_server::app::ServerState {
-        app: AppState::new(initial_snapshot_handle(snapshot), ready),
+        app: AppState::new(initial_snapshot_handle(snapshot), ready, default_cache_enabled),
         providers: ProviderRegistry::default(),
         admin: None,
     }
@@ -277,6 +360,33 @@ fn snapshot_for_model_target(
     )
 }
 
+fn snapshot_for_cache_modes(
+    base_url: &str,
+    provider_mode: Option<CacheMode>,
+    model_mode: Option<CacheMode>,
+) -> CompiledSnapshot {
+    let mut snapshot = snapshot_for_upstream(base_url);
+
+    if let Some(provider) = snapshot.providers_by_id.get_mut("openai") {
+        provider.cache = provider_mode.map(|mode| CachePolicyConfig { mode });
+    }
+
+    if let Some(model) = snapshot.models_by_name.get_mut("gpt-4o-mini") {
+        model.cache = model_mode.map(|mode| CachePolicyConfig { mode });
+    }
+
+    snapshot.provider_cache_modes.insert(
+        "openai".to_string(),
+        provider_mode.unwrap_or(CacheMode::Inherit),
+    );
+    snapshot.model_cache_modes.insert(
+        "gpt-4o-mini".to_string(),
+        model_mode.unwrap_or(CacheMode::Inherit),
+    );
+
+    snapshot
+}
+
 fn snapshot_for_provider(
     base_url: &str,
     revision: i64,
@@ -294,6 +404,8 @@ fn snapshot_for_provider(
         provider_limits: Default::default(),
         model_limits: Default::default(),
         key_limits: Default::default(),
+        provider_cache_modes: Default::default(),
+        model_cache_modes: Default::default(),
     };
 
     snapshot.keys_by_token.insert(
@@ -318,6 +430,7 @@ fn snapshot_for_provider(
             },
             policy_id: None,
             rate_limit: None,
+            cache: None,
         },
     );
     snapshot.models_by_name.insert(
@@ -328,6 +441,7 @@ fn snapshot_for_provider(
             upstream_model: upstream_model.to_string(),
             policy_id: None,
             rate_limit: None,
+            cache: None,
         },
     );
 

@@ -8,7 +8,10 @@ use tokio::sync::{Notify, oneshot};
 use aisix_config::{
     etcd_model::{ModelConfig, ProviderAuth, ProviderConfig, ProviderKind, RateLimitConfig},
     snapshot::CompiledSnapshot,
-    startup::{AdminConfig, DeploymentConfig, EtcdConfig, LogConfig, RedisConfig, RuntimeConfig, ServerConfig, StartupConfig},
+    startup::{
+        AdminConfig, CacheConfig, CacheDefaultMode, DeploymentConfig, EtcdConfig, LogConfig,
+        RedisConfig, RuntimeConfig, ServerConfig, StartupConfig,
+    },
     watcher::initial_snapshot_handle,
 };
 use aisix_core::AppState;
@@ -141,7 +144,7 @@ async fn failed_upstream_does_not_record_usage() {
 
 fn test_state(snapshot: CompiledSnapshot) -> aisix_server::app::ServerState {
     aisix_server::app::ServerState {
-        app: AppState::new(initial_snapshot_handle(snapshot), true),
+        app: AppState::new(initial_snapshot_handle(snapshot), true, false),
         providers: ProviderRegistry::default(),
         admin: None,
     }
@@ -162,6 +165,9 @@ fn broken_redis_config(etcd: EtcdConfig) -> StartupConfig {
             level: "info".to_string(),
         },
         runtime: RuntimeConfig { worker_threads: 1 },
+        cache: CacheConfig {
+            default: CacheDefaultMode::Disabled,
+        },
         deployment: DeploymentConfig {
             admin: AdminConfig {
                 enabled: false,
@@ -229,6 +235,8 @@ fn snapshot_with_inline_rpm_limit(base_url: &str, rpm: u64) -> CompiledSnapshot 
         provider_limits: Default::default(),
         model_limits: Default::default(),
         key_limits: Default::default(),
+        provider_cache_modes: Default::default(),
+        model_cache_modes: Default::default(),
     };
 
     snapshot.keys_by_token.insert(
@@ -265,6 +273,7 @@ fn snapshot_with_inline_rpm_limit(base_url: &str, rpm: u64) -> CompiledSnapshot 
                 tpm: None,
                 concurrency: None,
             }),
+            cache: None,
         },
     );
     snapshot.models_by_name.insert(
@@ -279,6 +288,7 @@ fn snapshot_with_inline_rpm_limit(base_url: &str, rpm: u64) -> CompiledSnapshot 
                 tpm: None,
                 concurrency: None,
             }),
+            cache: None,
         },
     );
 

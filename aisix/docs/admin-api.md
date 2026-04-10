@@ -123,7 +123,8 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/providers/openai \
     "id": "openai",
     "kind": "openai",
     "base_url": "https://api.openai.com",
-    "auth": {"secret_ref": "env:OPENAI_API_KEY"}
+    "auth": {"secret_ref": "env:OPENAI_API_KEY"},
+    "cache": {"mode": "enabled"}
   }'
 ```
 
@@ -145,7 +146,8 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/models/gpt-4o-mini \
   -d '{
     "id": "gpt-4o-mini",
     "provider_id": "openai",
-    "upstream_model": "gpt-4o-mini"
+    "upstream_model": "gpt-4o-mini",
+    "cache": {"mode": "inherit"}
   }'
 ```
 
@@ -184,9 +186,12 @@ curl -fsS -X DELETE http://127.0.0.1:4000/admin/apikeys/demo-key \
   "id": "openai",
   "kind": "openai",
   "base_url": "https://api.openai.com",
-  "auth": { "secret_ref": "env:OPENAI_API_KEY" }
+  "auth": { "secret_ref": "env:OPENAI_API_KEY" },
+  "cache": { "mode": "enabled" }
 }
 ```
+
+`cache` is optional. When omitted, provider cache behavior defaults to `inherit`.
 
 ### Model
 
@@ -194,9 +199,22 @@ curl -fsS -X DELETE http://127.0.0.1:4000/admin/apikeys/demo-key \
 {
   "id": "gpt-4o-mini",
   "provider_id": "openai",
-  "upstream_model": "gpt-4o-mini"
+  "upstream_model": "gpt-4o-mini",
+  "cache": { "mode": "inherit" }
 }
 ```
+
+`cache` is optional. Supported `cache.mode` values are `inherit`, `enabled`, and `disabled`. Missing `cache` is treated as `inherit`.
+
+## Cache Policy
+
+- The startup YAML exposes the process-level default via `cache.default`.
+- Provider and model resources expose resource-level overrides via `cache.mode`.
+- Effective precedence is `model > provider > global default`.
+- The global default is `disabled` when omitted.
+- Static cache switches are not supported on API keys.
+- Cache policy is not attached to `policy` resources.
+- The current cache policy applies only to non-stream chat JSON requests.
 
 ### API Key
 
