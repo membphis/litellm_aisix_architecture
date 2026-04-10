@@ -8,8 +8,10 @@
 - 检查 `expires_at`；过期 key 返回 401
 - 将 `KeyMeta` 注入 pipeline 上下文
 
+`/v1/messages` 为兼容常见 Anthropic SDK，额外支持从 `x-api-key` 读取 virtual key；若未提供该头，则回退到 `Authorization: Bearer`。
+
 ## Authorization（鉴权）
 
 - 检查已认证 key 的 `allowed_models` 是否包含请求的 model
 - 使用 `*` 通配符允许所有模型
-- 不在允许列表中返回 403 `permission_denied`
+- 不在允许列表中返回 403 `permission_error`

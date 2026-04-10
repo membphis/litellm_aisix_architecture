@@ -1,6 +1,9 @@
 use aisix_core::RequestContext;
 use aisix_types::error::{ErrorKind, GatewayError};
-use aisix_types::{request::CanonicalRequest, usage::TransportMode};
+use aisix_types::{
+    request::{CanonicalRequest, ProtocolFamily},
+    usage::TransportMode,
+};
 use axum::{body::Body, http::Response};
 
 use crate::{
@@ -65,14 +68,24 @@ pub async fn proxy(
                 CanonicalRequest::Embeddings(_) => None,
             };
 
-            build_json_response(
-                output.status,
-                output.body,
-                output.headers,
-                cache_hit,
-                Some(provider_id),
-                output.usage,
-            )
+            match ctx.egress_protocol {
+                ProtocolFamily::OpenAi => build_json_response(
+                    output.status,
+                    output.body,
+                    output.headers,
+                    cache_hit,
+                    Some(provider_id),
+                    output.usage,
+                ),
+                ProtocolFamily::Anthropic => {
+                    crate::protocol::anthropic::build_anthropic_json_response(
+                        output.status,
+                        output.body.as_ref(),
+                        output.usage,
+                        ctx.request.model_name(),
+                    )
+                }
+            }
         }
         TransportMode::SseStream => {
             let output = codec
@@ -82,13 +95,25 @@ pub async fn proxy(
                 ctx.usage = output.usage.clone();
             }
 
-            build_stream_response(
-                output.status,
-                output.body,
-                output.headers,
-                provider_id,
-                output.usage,
-            )
+            match ctx.egress_protocol {
+                ProtocolFamily::OpenAi => build_stream_response(
+                    output.status,
+                    output.body,
+                    output.headers,
+                    provider_id,
+                    output.usage,
+                ),
+                ProtocolFamily::Anthropic => {
+                    crate::protocol::anthropic::build_anthropic_stream_proxy_response(
+                        output.status,
+                        output.body,
+                        output.headers,
+                        provider_id,
+                        output.usage,
+                        ctx.request.model_name(),
+                    )
+                }
+            }
         }
     }
 }

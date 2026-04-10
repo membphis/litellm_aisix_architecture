@@ -26,6 +26,7 @@ pub fn build_router(state: ServerState) -> Router {
         .route("/health", get(health::health))
         .route("/ready", get(health::ready))
         .route("/v1/chat/completions", post(handlers::chat::chat_completions))
+        .route("/v1/messages", post(handlers::anthropic::messages))
         .route("/v1/embeddings", post(handlers::embeddings::embeddings));
 
     let router = if state.admin.is_some() {

@@ -2,17 +2,19 @@
 
 ### CanonicalRequest
 
-统一内部请求类型，归一化所有入站 API 端点：
+统一内部请求类型，归一化 OpenAI 与 Anthropic 入站端点：
 
 ```rust
 pub enum CanonicalRequest {
-    Chat(ChatRequest),
+    Chat(CanonicalChatRequest),
     Embeddings(EmbeddingsRequest),
 }
 ```
 
 枚举上的方法（`model_name()`、`transport_mode()`）提供统一访问接口，
 不感知具体是哪个 API 端点。
+
+`CanonicalChatRequest` 保留 `system`、normalized `messages`、`max_tokens`、`stop_sequences`、sampling 参数、`metadata`、`user` 和 `protocol family`，避免在入口阶段丢失 Anthropic 语义。
 
 ### TransportMode
 
@@ -67,6 +69,9 @@ struct RequestContext {
     request: CanonicalRequest,    // Decode 后填入
     snapshot: Arc<CompiledSnapshot>,
     key_meta: KeyMeta,            // Authentication 后填入
+    ingress_protocol: ProtocolFamily,
+    egress_protocol: ProtocolFamily,
+    anthropic_version: Option<String>,
     // resolved_route、usage 等由后续阶段填充
 }
 ```

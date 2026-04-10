@@ -2,7 +2,7 @@
 
 ## Phase 1 — MVP（4-6 周，当前阶段）
 
-- `/v1/chat/completions` + `/v1/embeddings`
+- `/v1/chat/completions` + `/v1/messages` + `/v1/embeddings`
 - OpenAI、Azure、Anthropic Provider
 - Virtual Key 认证、基础限流、内存缓存
 - 内嵌 Admin API、健康检查端点

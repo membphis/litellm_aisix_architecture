@@ -153,6 +153,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "axum",
+ "bytes",
  "chrono",
  "etcd-client",
  "http",

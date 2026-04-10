@@ -1,7 +1,7 @@
 use aisix_config::etcd_model::ProviderConfig;
 use aisix_types::{
     error::{ErrorKind, GatewayError},
-    request::CanonicalRequest,
+    request::{CanonicalContentPart, CanonicalRequest, CanonicalRole},
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -95,39 +95,19 @@ fn build_upstream_request(
 ) -> Result<Value, GatewayError> {
     match request {
         CanonicalRequest::Chat(request) => {
-            let mut system_parts = Vec::new();
+            let mut system_parts = request.system.clone();
             let mut messages = Vec::new();
 
             for message in &request.messages {
-                let Some(object) = message.as_object() else {
-                    return Err(unsupported_message_shape(message));
+                let role = match message.role {
+                    CanonicalRole::System => {
+                        system_parts.push(join_text_parts(&message.content));
+                        continue;
+                    }
+                    CanonicalRole::User => "user",
+                    CanonicalRole::Assistant => "assistant",
                 };
-                if object.len() != 2 || !object.contains_key("role") || !object.contains_key("content") {
-                    return Err(unsupported_message_shape(message));
-                }
-
-                let Some(role) = message.get("role").and_then(Value::as_str) else {
-                    return Err(unsupported_message_shape(message));
-                };
-                let Some(content) = message.get("content") else {
-                    return Err(unsupported_message_shape(message));
-                };
-
-                if role == "system" {
-                    let Some(content) = content.as_str() else {
-                        return Err(unsupported_message_shape(message));
-                    };
-                    system_parts.push(content.to_string());
-                    continue;
-                }
-
-                if role != "user" && role != "assistant" {
-                    return Err(unsupported_message_shape(message));
-                }
-
-                if !content.is_string() {
-                    return Err(unsupported_message_shape(message));
-                }
+                let content = join_text_parts(&message.content);
 
                 messages.push(json!({
                     "role": role,
@@ -138,12 +118,27 @@ fn build_upstream_request(
             let mut body = json!({
                 "model": upstream_model,
                 "stream": true,
-                "max_tokens": 1024,
+                "max_tokens": request.max_tokens.unwrap_or(1024),
                 "messages": messages,
             });
 
             if !system_parts.is_empty() {
                 body["system"] = Value::String(system_parts.join("\n\n"));
+            }
+            if !request.stop_sequences.is_empty() {
+                body["stop_sequences"] = serde_json::json!(request.stop_sequences);
+            }
+            if let Some(temperature) = request.temperature {
+                body["temperature"] = serde_json::json!(temperature);
+            }
+            if let Some(top_p) = request.top_p {
+                body["top_p"] = serde_json::json!(top_p);
+            }
+            if let Some(top_k) = request.top_k {
+                body["top_k"] = serde_json::json!(top_k);
+            }
+            if let Some(metadata) = &request.metadata {
+                body["metadata"] = metadata.clone();
             }
 
             Ok(body)
@@ -153,6 +148,15 @@ fn build_upstream_request(
             message: "anthropic does not support embeddings".to_string(),
         }),
     }
+}
+
+fn join_text_parts(parts: &[CanonicalContentPart]) -> String {
+    parts.iter()
+        .map(|part| match part {
+            CanonicalContentPart::Text { text } => text.as_str(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn render_normalized_events(events: &[OpenAiSseEvent]) -> Bytes {
@@ -192,77 +196,78 @@ fn resolve_secret(secret_ref: &str) -> Result<String, GatewayError> {
     })
 }
 
-fn unsupported_message_shape(message: &Value) -> GatewayError {
-    GatewayError {
-        kind: ErrorKind::InvalidRequest,
-        message: format!(
-            "unsupported Anthropic message shape for Phase 1: {}",
-            serde_json::to_string(message).unwrap_or_else(|_| "<unserializable message>".to_string())
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::build_upstream_request;
     use aisix_types::{
-        error::ErrorKind,
-        request::{CanonicalRequest, ChatRequest},
+        request::{
+            CanonicalChatRequest, CanonicalContentPart, CanonicalMessage, CanonicalRequest,
+            CanonicalRole, ProtocolFamily,
+        },
     };
-    use serde_json::json;
 
-    #[test]
-    fn rejects_unsupported_tool_role_messages() {
-        let request = CanonicalRequest::Chat(ChatRequest {
+    fn canonical_request(role: CanonicalRole, text: &str) -> CanonicalRequest {
+        CanonicalRequest::Chat(CanonicalChatRequest {
             model: "gpt-4o-mini".to_string(),
-            messages: vec![json!({
-                "role": "tool",
-                "content": "tool output"
-            })],
+            system: vec![],
+            messages: vec![CanonicalMessage {
+                role,
+                content: vec![CanonicalContentPart::Text {
+                    text: text.to_string(),
+                }],
+            }],
+            raw_messages: None,
             stream: true,
-        });
-
-        let error = build_upstream_request(&request, "claude-3-5-haiku-latest")
-            .expect_err("tool role should be rejected");
-
-        assert_eq!(error.kind, ErrorKind::InvalidRequest);
-        assert!(error.message.contains("unsupported Anthropic message shape"));
+            max_tokens: None,
+            stop_sequences: vec![],
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            user: None,
+            protocol: ProtocolFamily::OpenAi,
+        })
     }
 
     #[test]
-    fn anthropic_sse_rejects_non_string_message_content() {
-        let request = CanonicalRequest::Chat(ChatRequest {
+    fn anthropic_upstream_request_maps_system_and_message_content() {
+        let request = CanonicalRequest::Chat(CanonicalChatRequest {
             model: "gpt-4o-mini".to_string(),
-            messages: vec![json!({
-                "role": "user",
-                "content": {"text": "hello"}
-            })],
+            system: vec!["be concise".to_string()],
+            messages: vec![CanonicalMessage {
+                role: CanonicalRole::User,
+                content: vec![CanonicalContentPart::Text {
+                    text: "hello".to_string(),
+                }],
+            }],
+            raw_messages: None,
             stream: true,
+            max_tokens: Some(2048),
+            stop_sequences: vec![],
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            metadata: None,
+            user: None,
+            protocol: ProtocolFamily::OpenAi,
         });
 
-        let error = build_upstream_request(&request, "claude-3-5-haiku-latest")
-            .expect_err("non-string content should be rejected");
+        let body = build_upstream_request(&request, "claude-3-5-haiku-latest").unwrap();
 
-        assert_eq!(error.kind, ErrorKind::InvalidRequest);
-        assert!(error.message.contains("unsupported Anthropic message shape"));
+        assert_eq!(body["model"], "claude-3-5-haiku-latest");
+        assert_eq!(body["system"], "be concise");
+        assert_eq!(body["max_tokens"], 2048);
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "hello");
     }
 
     #[test]
-    fn rejects_supported_role_messages_with_extra_fields() {
-        let request = CanonicalRequest::Chat(ChatRequest {
-            model: "gpt-4o-mini".to_string(),
-            messages: vec![json!({
-                "role": "assistant",
-                "content": "hello",
-                "tool_calls": []
-            })],
-            stream: true,
-        });
+    fn anthropic_upstream_request_keeps_assistant_messages() {
+        let request = canonical_request(CanonicalRole::Assistant, "hello");
 
-        let error = build_upstream_request(&request, "claude-3-5-haiku-latest")
-            .expect_err("extra unsupported fields should be rejected");
+        let body = build_upstream_request(&request, "claude-3-5-haiku-latest").unwrap();
 
-        assert_eq!(error.kind, ErrorKind::InvalidRequest);
-        assert!(error.message.contains("unsupported Anthropic message shape"));
+        assert_eq!(body["messages"][0]["role"], "assistant");
+        assert_eq!(body["messages"][0]["content"], "hello");
     }
 }

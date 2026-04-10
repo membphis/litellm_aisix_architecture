@@ -1,6 +1,11 @@
 # 错误响应格式
 
-所有代理错误遵循 OpenAI 兼容 JSON：
+错误 envelope 由客户端入口协议决定：
+
+- OpenAI 兼容端点（如 `/v1/chat/completions`、`/v1/embeddings`）返回 OpenAI 兼容 JSON。
+- Anthropic Messages 端点（`/v1/messages`）返回 Anthropic error envelope。
+
+OpenAI error 示例：
 
 ```json
 {
@@ -12,18 +17,32 @@
 }
 ```
 
+Anthropic error 示例：
+
+```json
+{
+  "type": "error",
+  "error": {
+    "type": "invalid_request_error",
+    "message": "missing required anthropic-version header"
+  }
+}
+```
+
 ## ErrorKind → HTTP 状态码 + error.type 映射
+
+OpenAI 兼容端点与 Anthropic Messages 端点共享同一组 HTTP 状态码，但 `error.type` 文案可以按协议不同而不同。
 
 | HTTP | `error.type` | ErrorKind |
 |------|-------------|-----------|
 | 401 | `authentication_error` | `Authentication` |
-| 403 | `permission_denied` | `Permission` |
+| 403 | `permission_error` / `permission_denied` | `Permission` |
 | 429 | `rate_limit_error` | `RateLimited` |
 | 429 | `budget_exceeded` | （费用限制） |
 | 400 | `invalid_request_error` | `InvalidRequest` |
-| 502 | `upstream_error` | `Upstream` |
-| 504 | `timeout_error` | `Timeout` |
-| 500 | `internal_error` | `Internal` |
+| 502 | `api_error` / `upstream_error` | `Upstream` |
+| 504 | `api_error` / `timeout_error` | `Timeout` |
+| 500 | `api_error` / `internal_error` | `Internal` |
 
 ## 可重试错误
 

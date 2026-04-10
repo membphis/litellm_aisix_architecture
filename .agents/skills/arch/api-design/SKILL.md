@@ -40,14 +40,14 @@ related:
 
 | 分段 | 说明 | 文件 |
 |------|------|------|
-| 代理 API | 端点列表、OpenAI 兼容原则 | `sections/proxy-api.md` |
+| 代理 API | 端点列表、客户端协议兼容原则 | `sections/proxy-api.md` |
 | Pipeline | 固定阶段序列、handler 模式、run_pipeline | `sections/pipeline.md` |
 | 认证鉴权 | Authentication（Bearer token）+ Authorization（模型白名单） | `sections/auth.md` |
 | StreamChunk | SSE/JSON/Binary 流代理、帧边界、fallback、cancel safety | `sections/stream-chunk.md` |
 | Provider Codec | ProviderCodec trait、ProviderOutput、复用策略 | `sections/provider-codec.md` |
 | PostCall | 异步用量记账、费用追踪、UsageEvent | `sections/post-call.md` |
 | Admin API | 路由、认证、写入语义、错误码 | `sections/admin-api.md` |
-| 错误格式 | OpenAI 兼容错误 JSON、ErrorKind→HTTP 映射、可重试错误 | `sections/error-format.md` |
+| 错误格式 | 按入口协议区分的错误 JSON、ErrorKind→HTTP 映射、可重试错误 | `sections/error-format.md` |
 | 健康检查 | /health、/ready 端点 | `sections/health.md` |
 | 多端点复用 | Pipeline 复用度分析（A/B/C/D 组） | `sections/multi-endpoint.md` |
 | 当前妥协 | Phase 1-2 限制 | `sections/compromises.md` |

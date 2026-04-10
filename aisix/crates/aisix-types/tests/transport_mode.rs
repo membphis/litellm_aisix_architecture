@@ -1,19 +1,32 @@
-use aisix_types::request::{CanonicalRequest, ChatRequest, EmbeddingsRequest, TransportMode};
+use aisix_types::request::{
+    CanonicalChatRequest, CanonicalRequest, ChatRequest, EmbeddingsRequest, ProtocolFamily,
+    TransportMode,
+};
+
+fn canonical_chat_request(stream: bool) -> CanonicalChatRequest {
+    CanonicalChatRequest {
+        model: "gpt-4o-mini".to_string(),
+        system: vec![],
+        messages: vec![],
+        raw_messages: None,
+        stream,
+        max_tokens: None,
+        stop_sequences: vec![],
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        metadata: None,
+        user: None,
+        protocol: ProtocolFamily::OpenAi,
+    }
+}
 
 #[test]
 fn transport_mode_matches_request_shape() {
-    let chat_stream = CanonicalRequest::Chat(ChatRequest {
-        model: "gpt-4o-mini".to_string(),
-        messages: vec![],
-        stream: true,
-    });
+    let chat_stream = CanonicalRequest::Chat(canonical_chat_request(true));
     assert_eq!(chat_stream.transport_mode(), TransportMode::SseStream);
 
-    let chat_non_stream = CanonicalRequest::Chat(ChatRequest {
-        model: "gpt-4o-mini".to_string(),
-        messages: vec![],
-        stream: false,
-    });
+    let chat_non_stream = CanonicalRequest::Chat(canonical_chat_request(false));
     assert_eq!(chat_non_stream.transport_mode(), TransportMode::Json);
 
     let embeddings = CanonicalRequest::Embeddings(EmbeddingsRequest {
@@ -31,6 +44,20 @@ fn chat_request_without_stream_defaults_to_json_transport() {
     }))
     .expect("chat request should deserialize without stream field");
 
-    let request = CanonicalRequest::Chat(chat_request);
+    let request = CanonicalRequest::Chat(CanonicalChatRequest {
+        model: chat_request.model,
+        system: vec![],
+        messages: vec![],
+        raw_messages: Some(chat_request.messages),
+        stream: chat_request.stream,
+        max_tokens: None,
+        stop_sequences: vec![],
+        temperature: None,
+        top_p: None,
+        top_k: None,
+        metadata: None,
+        user: None,
+        protocol: ProtocolFamily::OpenAi,
+    });
     assert_eq!(request.transport_mode(), TransportMode::Json);
 }
