@@ -526,3 +526,45 @@ fn compile_snapshot_aggregates_multiple_independent_issues_while_keeping_valid_r
         "missing model reference: missing-model"
     );
 }
+
+#[test]
+fn compile_snapshot_does_not_keep_cache_modes_for_skipped_provider_or_model() {
+    let mut broken_provider = provider();
+    broken_provider.id = "provider-broken".to_string();
+    broken_provider.policy_id = Some("missing-policy".to_string());
+    broken_provider.cache = Some(CachePolicyConfig {
+        mode: CacheMode::Disabled,
+    });
+
+    let mut broken_model = model();
+    broken_model.id = "model-broken".to_string();
+    broken_model.provider_id = "provider-broken".to_string();
+    broken_model.cache = Some(CachePolicyConfig {
+        mode: CacheMode::Enabled,
+    });
+
+    let report = compile_snapshot(
+        vec![provider(), broken_provider],
+        vec![model(), broken_model],
+        vec![],
+        vec![policy()],
+        200,
+    )
+    .expect("invalid provider/model should be skipped");
+
+    let snapshot = report.snapshot;
+    assert_eq!(snapshot.provider_cache_modes.len(), 1);
+    assert_eq!(snapshot.model_cache_modes.len(), 1);
+    assert_eq!(
+        snapshot.provider_cache_modes.get("provider-1"),
+        Some(&CacheMode::Inherit)
+    );
+    assert_eq!(
+        snapshot.model_cache_modes.get("gpt-4o-mini"),
+        Some(&CacheMode::Inherit)
+    );
+    assert!(!snapshot
+        .provider_cache_modes
+        .contains_key("provider-broken"));
+    assert!(!snapshot.model_cache_modes.contains_key("model-broken"));
+}
