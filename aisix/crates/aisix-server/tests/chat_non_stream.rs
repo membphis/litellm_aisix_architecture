@@ -293,6 +293,74 @@ async fn non_stream_chat_hits_cache_when_globally_enabled_and_resources_inherit(
 }
 
 #[tokio::test]
+async fn provider_cache_enabled_overrides_global_default_disabled() {
+    let capture = Arc::new(CapturedRequest::default());
+    let upstream = spawn_openai_mock(capture.clone()).await;
+
+    let (first, second) = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
+        let state = test_state(
+            snapshot_for_cache_modes(&upstream.base_url, Some(CacheMode::Enabled), None),
+            true,
+            false,
+        );
+        let app = aisix_server::app::build_router(state);
+
+        let first = app.clone().oneshot(chat_request()).await.unwrap();
+        let second = app.oneshot(chat_request()).await.unwrap();
+
+        (first, second)
+    })
+    .await;
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(
+        first
+            .headers()
+            .get("x-aisix-cache-hit")
+            .and_then(|value| value.to_str().ok()),
+        Some("false")
+    );
+
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(
+        second
+            .headers()
+            .get("x-aisix-cache-hit")
+            .and_then(|value| value.to_str().ok()),
+        Some("true")
+    );
+    assert_eq!(capture.hits(), 1);
+}
+
+#[tokio::test]
+async fn provider_cache_disabled_overrides_global_default_enabled() {
+    let capture = Arc::new(CapturedRequest::default());
+    let upstream = spawn_openai_mock(capture.clone()).await;
+
+    let (first, second) = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
+        let state = test_state(
+            snapshot_for_cache_modes(&upstream.base_url, Some(CacheMode::Disabled), None),
+            true,
+            true,
+        );
+        let app = aisix_server::app::build_router(state);
+
+        let first = app.clone().oneshot(chat_request()).await.unwrap();
+        let second = app.oneshot(chat_request()).await.unwrap();
+
+        (first, second)
+    })
+    .await;
+
+    assert_eq!(first.status(), StatusCode::OK);
+    assert!(first.headers().get("x-aisix-cache-hit").is_none());
+
+    assert_eq!(second.status(), StatusCode::OK);
+    assert!(second.headers().get("x-aisix-cache-hit").is_none());
+    assert_eq!(capture.hits(), 2);
+}
+
+#[tokio::test]
 async fn model_cache_mode_overrides_provider_cache_mode() {
     let capture = Arc::new(CapturedRequest::default());
     let upstream = spawn_openai_mock(capture.clone()).await;

@@ -121,9 +121,88 @@ async fn bootstrap_loads_initial_snapshot_from_etcd() {
     let snapshot = state.snapshot.load();
 
     assert_eq!(snapshot.revision, expected_revision + 2);
+    assert!(!state.default_cache_enabled);
     assert!(snapshot.providers_by_id.contains_key("openai"));
     assert!(snapshot.models_by_name.contains_key("gpt-4o-mini"));
     assert!(snapshot.keys_by_token.contains_key("sk-demo"));
+}
+
+#[tokio::test]
+async fn bootstrap_sets_default_cache_enabled_when_cache_default_is_enabled() {
+    let harness = support::etcd::EtcdHarness::start()
+        .await
+        .expect("test etcd should start");
+    harness
+        .put_json(
+            "/aisix/providers/openai",
+            &json!({
+                "id": "openai",
+                "kind": "openai",
+                "base_url": "https://api.openai.com",
+                "auth": { "secret_ref": "env:OPENAI_API_KEY" },
+                "policy_id": null,
+                "rate_limit": null
+            }),
+        )
+        .await
+        .expect("provider fixture should be written");
+    harness
+        .put_json(
+            "/aisix/models/gpt-4o-mini",
+            &json!({
+                "id": "gpt-4o-mini",
+                "provider_id": "openai",
+                "upstream_model": "gpt-4o-mini",
+                "policy_id": null,
+                "rate_limit": null
+            }),
+        )
+        .await
+        .expect("model fixture should be written");
+    harness
+        .put_json(
+            "/aisix/apikeys/demo",
+            &json!({
+                "id": "demo",
+                "key": "sk-demo",
+                "allowed_models": ["gpt-4o-mini"],
+                "policy_id": null,
+                "rate_limit": null
+            }),
+        )
+        .await
+        .expect("apikey fixture should be written");
+
+    let config = StartupConfig {
+        server: ServerConfig {
+            listen: "127.0.0.1:0".to_string(),
+            metrics_listen: "127.0.0.1:0".to_string(),
+            request_body_limit_mb: 1,
+        },
+        etcd: harness.config(),
+        redis: RedisConfig {
+            url: "redis://127.0.0.1:1".to_string(),
+        },
+        log: LogConfig {
+            level: "info".to_string(),
+        },
+        runtime: RuntimeConfig { worker_threads: 1 },
+        cache: CacheConfig {
+            default: CacheDefaultMode::Enabled,
+        },
+        deployment: DeploymentConfig {
+            admin: AdminConfig {
+                enabled: false,
+                admin_keys: vec![],
+            },
+        },
+    };
+
+    let state = aisix_runtime::bootstrap::bootstrap(&config)
+        .await
+        .expect("startup should succeed");
+
+    assert!(state.default_cache_enabled);
 }
 
 #[tokio::test]
