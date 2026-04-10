@@ -3,13 +3,14 @@ use aisix_config::etcd_model::CacheMode;
 use aisix_core::RequestContext;
 use aisix_types::{
     error::{ErrorKind, GatewayError},
-    request::CanonicalRequest,
+    request::{CanonicalRequest, ProtocolFamily},
     usage::Usage,
 };
 use axum::{
     body::{Body, Bytes},
     http::Response,
 };
+use serde_json::json;
 
 use crate::{app::ServerState, pipeline::response::build_json_response};
 
@@ -85,12 +86,29 @@ fn cache_key_for_chat(ctx: &RequestContext) -> Result<Option<String>, GatewayErr
         provider_id,
         upstream_model,
         &chat_request.model,
-        &chat_request.messages,
+        &request_signature(chat_request),
     )
     .map(Some)
     .map_err(|error| GatewayError {
         kind: ErrorKind::Internal,
         message: format!("failed to build chat cache key: {error}"),
+    })
+}
+
+fn request_signature(
+    chat_request: &aisix_types::request::CanonicalChatRequest,
+) -> serde_json::Value {
+    json!({
+        "system": chat_request.system,
+        "messages": chat_request.messages,
+        "raw_messages": chat_request.raw_messages,
+        "max_tokens": chat_request.max_tokens,
+        "stop_sequences": chat_request.stop_sequences,
+        "temperature": chat_request.temperature,
+        "top_p": chat_request.top_p,
+        "top_k": chat_request.top_k,
+        "metadata": chat_request.metadata,
+        "user": chat_request.user,
     })
 }
 
@@ -109,14 +127,24 @@ pub fn lookup_chat(
     ctx.response_cached = true;
     ctx.usage = cached.usage.clone();
 
-    Ok(Some(build_json_response(
-        http::StatusCode::OK,
-        cached.body,
-        http::HeaderMap::new(),
-        Some("true"),
-        Some(&cached.provider_id),
-        cached.usage,
-    )?))
+    let response = match ctx.egress_protocol {
+        ProtocolFamily::OpenAi => build_json_response(
+            http::StatusCode::OK,
+            cached.body,
+            http::HeaderMap::new(),
+            Some("true"),
+            Some(&cached.provider_id),
+            cached.usage,
+        )?,
+        ProtocolFamily::Anthropic => crate::protocol::anthropic::build_anthropic_json_response(
+            http::StatusCode::OK,
+            cached.body.as_ref(),
+            cached.usage,
+            ctx.request.model_name(),
+        )?,
+    };
+
+    Ok(Some(response))
 }
 
 pub fn store_chat_success(
@@ -168,7 +196,10 @@ mod tests {
     use aisix_providers::ProviderRegistry;
     use aisix_types::{
         entities::KeyMeta,
-        request::{CanonicalRequest, ChatRequest},
+        request::{
+            CanonicalChatRequest, CanonicalContentPart, CanonicalMessage, CanonicalRequest,
+            CanonicalRole, ProtocolFamily,
+        },
     };
     use axum::body::Bytes;
     use serde_json::json;
@@ -185,10 +216,25 @@ mod tests {
             admin: None,
         };
         let mut ctx = RequestContext::new(
-            CanonicalRequest::Chat(ChatRequest {
+            CanonicalRequest::Chat(CanonicalChatRequest {
                 model: "gpt-4o-mini".to_string(),
-                messages: vec![json!({"role": "user", "content": "hello"})],
+                system: vec![],
+                messages: vec![CanonicalMessage {
+                    role: CanonicalRole::User,
+                    content: vec![CanonicalContentPart::Text {
+                        text: "hello".to_string(),
+                    }],
+                }],
+                raw_messages: None,
                 stream: false,
+                max_tokens: None,
+                stop_sequences: vec![],
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                metadata: None,
+                user: None,
+                protocol: ProtocolFamily::OpenAi,
             }),
             KeyMeta {
                 key_id: "vk_123".to_string(),
@@ -208,7 +254,21 @@ mod tests {
             "openai",
             "gpt-4o-mini-2024-07-18",
             "gpt-4o-mini",
-            &[json!({"role": "user", "content": "hello"})],
+            &json!({
+                "system": [],
+                "messages": [{
+                    "role": "User",
+                    "content": [{"Text": {"text": "hello"}}]
+                }],
+                "raw_messages": null,
+                "max_tokens": null,
+                "stop_sequences": [],
+                "temperature": null,
+                "top_p": null,
+                "top_k": null,
+                "metadata": null,
+                "user": null
+            }),
         )
         .unwrap();
         state.app.cache.put_chat(

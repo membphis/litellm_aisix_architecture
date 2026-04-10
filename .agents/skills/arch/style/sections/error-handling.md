@@ -12,7 +12,7 @@ struct GatewayError { kind: ErrorKind, message: String }
 ```
 
 - 用结构体字面量显式构造，不通过 `From` 转换
-- 实现 `axum::IntoResponse`，输出 OpenAI 兼容 JSON
+- 实现 `axum::IntoResponse`，默认输出 OpenAI 兼容 JSON；`/v1/messages` handler 会在边界层改用 Anthropic error envelope
 - 所有 pipeline 阶段返回 `Result<_, GatewayError>`
 
 ### 2. RedisError（基础设施层，`aisix-storage`）

@@ -15,7 +15,7 @@ pub async fn chat_completions(
 ) -> Result<Response, GatewayError> {
     let snapshot = state.app.snapshot.load_full();
     let mut ctx = RequestContext::new(
-        aisix_types::request::CanonicalRequest::Chat(request),
+        aisix_types::request::CanonicalRequest::Chat(request.into_canonical()?),
         authenticated_key.meta,
         snapshot,
     );

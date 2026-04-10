@@ -64,6 +64,18 @@ pub struct OpenAiErrorBody {
     pub error_type: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnthropicErrorResponse {
+    pub error: AnthropicErrorBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnthropicErrorBody {
+    #[serde(rename = "type")]
+    pub error_type: String,
+    pub message: String,
+}
+
 fn error_type(status: StatusCode) -> &'static str {
     match status {
         StatusCode::UNAUTHORIZED => "authentication_error",

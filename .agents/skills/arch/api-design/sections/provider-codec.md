@@ -25,6 +25,7 @@ pub enum ProviderOutput {
 
 ### Codec 复用策略
 
+- 客户端 ingress 协议与上游 provider kind 解耦。`/v1/messages` 可以走 Anthropic 客户端协议，但继续复用 `OpenAiCompatCodec` 访问 OpenAI-compatible 上游。
 - `OpenAICompatCodec`：通用实现，覆盖所有 OpenAI 兼容 Provider
   （OpenAI、Azure、Ollama、vLLM、Groq）— 通过 base_url + auth 策略参数化
 - 非兼容 Provider（Anthropic、Vertex、Bedrock）：各自独立实现
