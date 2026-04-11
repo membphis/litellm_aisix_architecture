@@ -457,6 +457,29 @@ async fn admin_router_serves_ui_and_admin_api() {
 }
 
 #[tokio::test]
+async fn data_plane_router_does_not_serve_ui_entrypoint() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.data_plane_router();
+
+    let response = app
+        .oneshot(Request::builder().uri("/ui").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_router_does_not_serve_v1_chat() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.admin_router();
+
+    let response = app.oneshot(chat_request("live-token", "gpt-4o-mini")).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn admin_rejects_path_and_body_id_mismatch() {
     let fixture = LiveEtcdTestApp::start().await;
     let app = fixture.router();

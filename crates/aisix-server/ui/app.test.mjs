@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  adminKeyStorageMode,
   buildDeleteImpact,
   buildResourcePayload,
   deriveRelationshipModel,
@@ -129,4 +130,8 @@ test('buildDeleteImpact lists dependent resources before delete', () => {
 test('nextAdminRefreshState waits for admin key before loading', () => {
   assert.deepEqual(nextAdminRefreshState(''), { shouldRefresh: false, connectionState: 'idle' });
   assert.deepEqual(nextAdminRefreshState('test-admin-key'), { shouldRefresh: true, connectionState: 'loading' });
+});
+
+test('admin key persistence stays session-scoped', () => {
+  assert.equal(adminKeyStorageMode(), 'session');
 });

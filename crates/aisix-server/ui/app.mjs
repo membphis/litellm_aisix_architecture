@@ -87,9 +87,17 @@ const COLLECTIONS = {
 
 const hasBrowserDom = typeof document !== 'undefined';
 const hasSessionStorage = typeof sessionStorage !== 'undefined';
+const ADMIN_KEY_STORAGE_KEY = 'aisix-admin-key';
+
+function adminKeyStorage() {
+  if (adminKeyStorageMode() !== 'session' || !hasSessionStorage) {
+    return null;
+  }
+  return sessionStorage;
+}
 
 const state = {
-  adminKey: hasSessionStorage ? sessionStorage.getItem('aisix-admin-key') ?? '' : '',
+  adminKey: adminKeyStorage()?.getItem(ADMIN_KEY_STORAGE_KEY) ?? '',
   activeCollection: 'providers',
   data: {
     providers: [],
@@ -401,8 +409,9 @@ function renderField(field, value) {
 function bindGlobalEvents() {
   document.querySelector('#admin-key-input')?.addEventListener('change', (event) => {
     state.adminKey = event.target.value.trim();
-    if (hasSessionStorage) {
-      sessionStorage.setItem('aisix-admin-key', state.adminKey);
+    const storage = adminKeyStorage();
+    if (storage) {
+      storage.setItem(ADMIN_KEY_STORAGE_KEY, state.adminKey);
     }
     void refreshAll();
   });
@@ -842,6 +851,10 @@ export function nextAdminRefreshState(adminKey) {
     return { shouldRefresh: false, connectionState: 'idle' };
   }
   return { shouldRefresh: true, connectionState: 'loading' };
+}
+
+export function adminKeyStorageMode() {
+  return 'session';
 }
 
 function defaultFormValues(collection) {
