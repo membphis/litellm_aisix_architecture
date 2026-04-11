@@ -1,5 +1,7 @@
 # aisix
 
+[![CI](https://github.com/membphis/litellm_aisix_architecture/actions/workflows/ci.yml/badge.svg)](https://github.com/membphis/litellm_aisix_architecture/actions/workflows/ci.yml)
+
 Minimal AI gateway with a built-in Admin API for phase 1.
 
 ## Getting Started
