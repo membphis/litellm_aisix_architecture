@@ -15,7 +15,7 @@ const COLLECTIONS = {
       { name: 'kind', label: 'Kind', type: 'select', options: ['openai', 'azure_openai', 'anthropic'], required: true },
       { name: 'base_url', label: 'Base URL', type: 'text', required: true },
       { name: 'secret_ref', label: 'Secret Ref', type: 'text', required: true },
-      { name: 'policy_id', label: 'Policy ID', type: 'text' },
+      { name: 'policy_id', label: 'Policy ID', type: 'reference', source: 'policies' },
       { name: 'cache_mode', label: 'Cache Mode', type: 'select', options: ['', 'inherit', 'enabled', 'disabled'] },
       { name: 'rate_limit_rpm', label: 'RPM', type: 'number' },
       { name: 'rate_limit_tpm', label: 'TPM', type: 'number' },
@@ -35,9 +35,9 @@ const COLLECTIONS = {
     ],
     form: [
       { name: 'id', label: 'Model ID', type: 'text', required: true },
-      { name: 'provider_id', label: 'Provider ID', type: 'text', required: true },
+      { name: 'provider_id', label: 'Provider ID', type: 'reference', source: 'providers', required: true },
       { name: 'upstream_model', label: 'Upstream Model', type: 'text', required: true },
-      { name: 'policy_id', label: 'Policy ID', type: 'text' },
+      { name: 'policy_id', label: 'Policy ID', type: 'reference', source: 'policies' },
       { name: 'cache_mode', label: 'Cache Mode', type: 'select', options: ['', 'inherit', 'enabled', 'disabled'] },
       { name: 'rate_limit_rpm', label: 'RPM', type: 'number' },
       { name: 'rate_limit_tpm', label: 'TPM', type: 'number' },
@@ -59,7 +59,7 @@ const COLLECTIONS = {
       { name: 'id', label: 'Key ID', type: 'text', required: true },
       { name: 'key', label: 'Plaintext Key', type: 'text', required: true },
       { name: 'allowed_models', label: 'Allowed Models (comma separated)', type: 'textarea', required: true },
-      { name: 'policy_id', label: 'Policy ID', type: 'text' },
+      { name: 'policy_id', label: 'Policy ID', type: 'reference', source: 'policies' },
       { name: 'rate_limit_rpm', label: 'RPM', type: 'number' },
       { name: 'rate_limit_tpm', label: 'TPM', type: 'number' },
       { name: 'rate_limit_concurrency', label: 'Concurrency', type: 'number' },
@@ -96,9 +96,19 @@ function adminKeyStorage() {
   return sessionStorage;
 }
 
+export function restoreAdminKeyValidity(adminKey) {
+  return Boolean(adminKey && adminKey.trim());
+}
+
+export function shouldRefreshOnInit({ adminKey, adminKeyValid }) {
+  return Boolean(adminKeyValid && adminKey && adminKey.trim());
+}
+
+const initialAdminKey = adminKeyStorage()?.getItem(ADMIN_KEY_STORAGE_KEY) ?? '';
+
 const state = {
-  adminKey: adminKeyStorage()?.getItem(ADMIN_KEY_STORAGE_KEY) ?? '',
-  adminKeyValid: false,
+  adminKey: initialAdminKey,
+  adminKeyValid: restoreAdminKeyValidity(initialAdminKey),
   adminKeyError: '',
   isValidatingAdminKey: false,
   activeCollection: 'providers',
@@ -111,9 +121,6 @@ const state = {
   derived: null,
   search: '',
   filter: 'all',
-  selectedId: null,
-  formMode: 'create',
-  editingId: null,
   draftMode: null,
   editorCollection: null,
   editorValues: null,
@@ -133,6 +140,9 @@ function init() {
     return;
   }
   render();
+  if (shouldRefreshOnInit(state)) {
+    void refreshAll();
+  }
 }
 
 function render() {
@@ -142,17 +152,20 @@ function render() {
   const resourceConfig = COLLECTIONS[collection];
   const derivedCollection = derived[collection];
   const items = filterItems(derivedCollection.items, collection);
-  const selected = state.selectedId ? derivedCollection.byId[state.selectedId] : items[0] ?? null;
-  if (!state.selectedId && selected) {
-    state.selectedId = selected.id;
-  }
+  const editorCollection = state.editorCollection ?? collection;
+  const editorItem = state.editorId ? derived[editorCollection]?.byId[state.editorId] ?? null : null;
+  const editorValues = state.editorValues ?? defaultFormValues(editorCollection);
+  const uiMode = nextAdminUiMode({
+    adminKey: state.adminKey,
+    adminKeyValid: state.adminKeyValid,
+    draftMode: state.draftMode,
+  });
 
   appRoot.innerHTML = `
     <div class="layout">
       <aside class="sidebar">
         <div class="brand">
           <h1>AISIX Control Plane</h1>
-          <p>Embedded admin UI for stored config, relationships, and runtime validity hints.</p>
         </div>
         <div class="nav" style="margin-top: 18px;">
           ${Object.entries(COLLECTIONS)
@@ -181,41 +194,101 @@ function render() {
           </div>
         </section>
         <section class="workspace">
-          <div class="panel">
-            <div class="panel-header">
-              <div>
-                <h2>${resourceConfig.label}</h2>
-                <div class="muted">${resourceConfig.empty}</div>
-              </div>
-              <div class="detail-actions">
-                <button class="secondary-button" type="button" id="refresh-button">Refresh</button>
-                <button class="button" type="button" id="create-button">Create ${resourceConfig.label.slice(0, -1) || resourceConfig.label}</button>
-              </div>
-            </div>
-            <div class="controls">
-              <input id="search-input" type="search" placeholder="Search by id, relation, or summary" value="${escapeHtml(state.search)}" />
-              <select id="status-filter">
-                <option value="all" ${state.filter === 'all' ? 'selected' : ''}>All statuses</option>
-                <option value="valid" ${state.filter === 'valid' ? 'selected' : ''}>Valid</option>
-                <option value="missing_dependency" ${state.filter === 'missing_dependency' ? 'selected' : ''}>Missing dependency</option>
-                <option value="orphaned" ${state.filter === 'orphaned' ? 'selected' : ''}>Orphaned</option>
-              </select>
-              <button class="secondary-button" type="button" id="clear-filter-button">Clear</button>
-            </div>
-            ${renderTable(collection, items)}
-          </div>
-          <div class="detail-card">
-            ${selected ? renderDetail(collection, selected) : renderEmptyDetail(resourceConfig.label)}
-          </div>
+          ${uiMode.mode === 'editing'
+            ? renderEditorView(editorCollection, editorValues, editorItem)
+            : renderListView(collection, items)}
         </section>
       </main>
-      ${!state.adminKeyValid ? renderAdminKeyGate() : ''}
     </div>
+    ${!state.adminKeyValid ? renderAdminKeyGate() : ''}
   `;
 
   bindGlobalEvents();
   bindTableEvents(items);
-  bindDetailEvents(selected);
+  bindEditorEvents(editorItem);
+}
+
+function renderListView(collection, items) {
+  const resourceConfig = COLLECTIONS[collection];
+  return `
+    <div class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>${resourceConfig.label}</h2>
+          <div class="muted">${resourceConfig.empty}</div>
+        </div>
+        <div class="detail-actions">
+          <button class="secondary-button" type="button" id="refresh-button">Refresh</button>
+          <button class="button" type="button" id="create-button">Create ${resourceConfig.label.slice(0, -1) || resourceConfig.label}</button>
+        </div>
+      </div>
+      <div class="controls">
+        <input id="search-input" type="search" placeholder="Search by id, relation, or summary" value="${escapeHtml(state.search)}" />
+        <select id="status-filter">
+          <option value="all" ${state.filter === 'all' ? 'selected' : ''}>All statuses</option>
+          <option value="valid" ${state.filter === 'valid' ? 'selected' : ''}>Valid</option>
+          <option value="missing_dependency" ${state.filter === 'missing_dependency' ? 'selected' : ''}>Missing dependency</option>
+          <option value="orphaned" ${state.filter === 'orphaned' ? 'selected' : ''}>Orphaned</option>
+        </select>
+        <button class="secondary-button" type="button" id="clear-filter-button">Clear</button>
+      </div>
+      ${renderTable(collection, items)}
+    </div>
+  `;
+}
+
+function renderEditorView(collection, values, item) {
+  const resourceConfig = COLLECTIONS[collection];
+  const modeLabel = state.draftMode === 'create' ? 'Create resource' : 'Edit resource';
+  const heading = state.draftMode === 'create'
+    ? `Create ${resourceConfig.label.slice(0, -1) || resourceConfig.label}`
+    : escapeHtml(item?.id ?? values.id ?? resourceConfig.label);
+  const statusLine = item ? `<div class="status-line">${statusBadgeMarkup(item.status)}</div>` : '<div class="muted">New resource draft</div>';
+
+  return `
+    <div class="panel">
+      <div class="detail-sections">
+        <div class="detail-header">
+          <div>
+            <div class="muted">${modeLabel}</div>
+            <h2>${heading}</h2>
+            ${statusLine}
+          </div>
+          <div class="detail-actions">
+            <button class="secondary-button" type="button" id="back-button">Back</button>
+            ${collection === 'apikeys' && item ? `<button class="secondary-button" type="button" id="toggle-secret-button">${state.revealMap.get(item.id) ? 'Hide key' : 'Reveal key'}</button>` : ''}
+            ${state.draftMode === 'edit' && item ? `<button class="secondary-button danger-button" type="button" id="delete-button">Delete</button>` : ''}
+          </div>
+        </div>
+        ${item ? renderEditorSummary(collection, item) : ''}
+        <section>
+          <div class="split-line">
+            <h3>${modeLabel}</h3>
+            <span class="muted">PUT ${resourceConfig.path}/:id</span>
+          </div>
+          <form id="resource-form" class="form-grid">
+            ${renderFormFields(collection, values, { readonlyId: state.draftMode === 'edit' })}
+            <div class="form-actions">
+              <button class="button" type="submit">Save</button>
+              <button class="secondary-button" type="button" id="back-button-secondary">Back</button>
+              ${state.draftMode === 'edit' && item ? `<button class="secondary-button danger-button" type="button" id="delete-button-secondary">Delete</button>` : ''}
+            </div>
+          </form>
+        </section>
+      </div>
+    </div>
+  `;
+}
+
+function syncEditorValuesFromForm(formData) {
+  if (!state.draftMode || !state.editorCollection) {
+    return;
+  }
+  const nextValues = { ...state.editorValues };
+  for (const [key, value] of formData.entries()) {
+    nextValues[key] = value;
+  }
+  state.editorValues = nextValues;
 }
 
 function renderAdminKeyGate() {
@@ -248,88 +321,32 @@ function renderTable(collection, items) {
   const columns = COLLECTIONS[collection].columns;
   return `
     <div class="table">
-      <div class="table-header">${columns.map((column) => `<div>${column.label}</div>`).join('')}</div>
+      <div class="table-header">${columns.map((column) => `<div>${column.label}</div>`).join('')}<div>Actions</div></div>
       ${
         items.length
           ? items
               .map((item) => {
-                const raw = item.raw;
+                const actions = buildRowActions(collection, item.id);
                 return `
-                  <div class="table-row ${item.id === state.selectedId ? 'selected' : ''}" data-row-id="${item.id}" tabindex="0">
+                  <div class="table-row" data-row-id="${item.id}">
                     ${columns
-                      .map((column) => `<button type="button" data-row-select="${item.id}">${escapeHtml(formatColumnValue(collection, column.key, raw, item))}</button>`)
+                      .map((column) => `<div>${escapeHtml(formatColumnValue(collection, column.key, item.raw, item))}</div>`)
                       .join('')}
+                    <div class="row-actions">
+                      ${actions
+                        .map((action) =>
+                          action.kind === 'edit'
+                            ? `<button class="secondary-button" type="button" data-edit-id="${action.id}">Edit</button>`
+                            : `<button class="secondary-button danger-button" type="button" data-delete-id="${action.id}">Delete</button>`,
+                        )
+                        .join('')}
+                    </div>
                   </div>
                 `;
               })
               .join('')
           : `<div class="table-empty">${COLLECTIONS[collection].empty}</div>`
       }
-    </div>
-  `;
-}
-
-function renderEmptyDetail(label) {
-  return `
-    <div class="detail-header">
-      <div>
-        <h2>No ${label.toLowerCase()} selected</h2>
-        <p class="muted">Choose a row or create a new resource to begin.</p>
-      </div>
-    </div>
-  `;
-}
-
-function renderDetail(collection, item) {
-  const formValues = toFormValues(collection, item.raw);
-  const statusBadge = statusBadgeMarkup(item.status);
-  return `
-    <div class="detail-sections">
-      <div class="detail-header">
-        <div>
-          <div class="muted">${COLLECTIONS[collection].label.slice(0, -1) || COLLECTIONS[collection].label}</div>
-          <h2>${escapeHtml(item.id)}</h2>
-          <div class="status-line">${statusBadge}</div>
-        </div>
-        <div class="detail-actions">
-          ${collection === 'apikeys' ? `<button class="secondary-button" type="button" id="toggle-secret-button">${state.revealMap.get(item.id) ? 'Hide key' : 'Reveal key'}</button>` : ''}
-          <button class="secondary-button" type="button" id="refresh-one-button">Refresh</button>
-        </div>
-      </div>
-      <section>
-        <div class="split-line">
-          <h3>Summary</h3>
-          <span class="muted">Stored in admin config</span>
-        </div>
-        ${renderSummary(collection, item)}
-      </section>
-      <section>
-        <h3>Relations</h3>
-        <div class="relation-list">
-          <div class="relation-item">
-            <strong>Depends on</strong>
-            ${item.dependsOn.length ? item.dependsOn.map(renderRelationItem).join('') : '<p class="muted">No direct dependencies.</p>'}
-          </div>
-          <div class="relation-item">
-            <strong>Referenced by</strong>
-            ${item.referencedBy.length ? item.referencedBy.map(renderRelationItem).join('') : '<p class="muted">No reverse references.</p>'}
-          </div>
-        </div>
-      </section>
-      <section>
-        <div class="split-line">
-          <h3>${state.formMode === 'edit' && state.editingId === item.id ? 'Edit resource' : 'Edit resource'}</h3>
-          <span class="muted">PUT ${COLLECTIONS[collection].path}/:id</span>
-        </div>
-        <form id="resource-form" class="form-grid">
-          ${renderFormFields(collection, formValues, { readonlyId: true })}
-          <div class="form-actions">
-            <button class="button" type="submit">Save ${COLLECTIONS[collection].label.slice(0, -1) || COLLECTIONS[collection].label}</button>
-            <button class="secondary-button" type="button" id="clone-button">Clone into create</button>
-            <button class="secondary-button danger-button" type="button" id="delete-button">Delete</button>
-          </div>
-        </form>
-      </section>
     </div>
   `;
 }
@@ -364,24 +381,26 @@ function renderSummary(collection, item) {
     .join('')}</dl>`;
 }
 
-function renderRelationItem(relation) {
+export function renderEditorSummary(collection, item) {
   return `
-    <div class="relation-item" style="margin-top: 10px;">
+    <section>
       <div class="split-line">
-        <button class="detail-link" type="button" data-jump-collection="${relation.collection}" data-jump-id="${relation.id}">${escapeHtml(relation.label)}</button>
-        ${statusBadgeMarkup(relation.status)}
+        <h3>Summary</h3>
+        <span class="muted">Stored in admin config</span>
       </div>
-      <div class="muted">${escapeHtml(relation.description)}</div>
-    </div>
+      ${renderSummary(collection, item)}
+    </section>
   `;
 }
 
 function renderFormFields(collection, values, options = {}) {
+  const referenceOptions = buildReferenceOptions(collection, state.data);
   const fields = COLLECTIONS[collection].form.map((field) => {
+    const enriched = field.type === 'reference' ? { ...field, options: referenceOptions[field.name] ?? [] } : field;
     if (options.readonlyId && field.name === 'id') {
-      return { ...field, readonly: true };
+      return { ...enriched, readonly: true };
     }
-    return field;
+    return enriched;
   });
   const fieldMarkup = fields.map((field) => renderField(field, values[field.name] ?? ''));
   if (collection === 'apikeys') {
@@ -399,9 +418,23 @@ function renderFormFields(collection, values, options = {}) {
   return `${normal.join('')}<div class="field-grid">${metrics.join('')}</div>`;
 }
 
-function renderField(field, value) {
+export function renderField(field, value) {
   const required = field.required ? 'required' : '';
   const readonly = field.readonly ? 'readonly' : '';
+  if (field.type === 'reference') {
+    const options = field.options ?? [];
+    const selectedValue = options.includes(String(value)) ? String(value) : '';
+    return `
+      <label>
+        ${escapeHtml(field.label)}
+        <select name="${field.name}__preset" ${readonly}>
+          <option value="">Select existing...</option>
+          ${options.map((option) => `<option value="${escapeHtml(option)}" ${selectedValue === option ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}
+        </select>
+        <input name="${field.name}" type="text" value="${escapeHtml(String(value))}" placeholder="Manual value" ${required} ${readonly} />
+      </label>
+    `;
+  }
   if (field.type === 'select') {
     return `
       <label>
@@ -458,9 +491,7 @@ function bindGlobalEvents() {
   document.querySelectorAll('[data-nav]').forEach((button) => {
     button.addEventListener('click', () => {
       state.activeCollection = button.dataset.nav;
-      state.selectedId = null;
-      state.formMode = 'edit';
-      state.editingId = null;
+      Object.assign(state, finishEditorFlow());
       render();
     });
   });
@@ -486,70 +517,84 @@ function bindGlobalEvents() {
   });
 
   document.querySelector('#create-button')?.addEventListener('click', () => {
-    state.selectedId = null;
-    showCreateModal(state.activeCollection);
+    Object.assign(state, startCreateAction(state.activeCollection));
+    render();
   });
 }
 
 function bindTableEvents(items) {
-  document.querySelectorAll('[data-row-select]').forEach((button) => {
+  document.querySelectorAll('[data-edit-id]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.selectedId = button.dataset.rowSelect;
+      const item = items.find((candidate) => candidate.id === button.dataset.editId);
+      if (!item) {
+        return;
+      }
+      Object.assign(state, startEditAction(state.activeCollection, item.raw));
       render();
     });
   });
 
-  document.querySelectorAll('[data-row-id]').forEach((row) => {
-    row.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        state.selectedId = row.dataset.rowId;
-        render();
+  document.querySelectorAll('[data-delete-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      showDeleteModal(state.activeCollection, button.dataset.deleteId);
+    });
+  });
+}
+
+function bindEditorEvents(selected) {
+  if (!state.draftMode) {
+    return;
+  }
+
+  const goBack = () => {
+    Object.assign(state, finishEditorFlow());
+    render();
+  };
+
+  document.querySelector('#back-button')?.addEventListener('click', goBack);
+  document.querySelector('#back-button-secondary')?.addEventListener('click', goBack);
+
+  document.querySelectorAll('[name$="__preset"]').forEach((select) => {
+    select.addEventListener('change', (event) => {
+      const target = event.currentTarget;
+      const fieldName = target.name.replace(/__preset$/, '');
+      const input = document.querySelector(`[name="${fieldName}"]`);
+      if (!(input instanceof HTMLInputElement)) {
+        return;
+      }
+      if (target.value) {
+        input.value = target.value;
       }
     });
   });
 
-  if (!items.some((item) => item.id === state.selectedId)) {
-    state.selectedId = items[0]?.id ?? null;
-  }
-}
-
-function bindDetailEvents(selected) {
-  if (!selected) {
-    return;
-  }
-
   document.querySelector('#toggle-secret-button')?.addEventListener('click', () => {
+    if (!selected) {
+      return;
+    }
     const current = state.revealMap.get(selected.id) ?? false;
     state.revealMap.set(selected.id, !current);
     render();
   });
 
-  document.querySelector('#refresh-one-button')?.addEventListener('click', () => {
-    void refreshAll();
-  });
-
-  document.querySelector('#clone-button')?.addEventListener('click', () => {
-    showCreateModal(state.activeCollection, toFormValues(state.activeCollection, selected.raw));
-  });
-
   document.querySelector('#delete-button')?.addEventListener('click', () => {
-    showDeleteModal(state.activeCollection, selected.id);
+    if (selected) {
+      showDeleteModal(state.editorCollection, selected.id);
+    }
+  });
+
+  document.querySelector('#delete-button-secondary')?.addEventListener('click', () => {
+    if (selected) {
+      showDeleteModal(state.editorCollection, selected.id);
+    }
   });
 
   document.querySelector('#resource-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
+    syncEditorValuesFromForm(formData);
     const values = Object.fromEntries(formData.entries());
-    void saveResource(state.activeCollection, values, selected.id);
-  });
-
-  document.querySelectorAll('[data-jump-collection]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.activeCollection = button.dataset.jumpCollection;
-      state.selectedId = button.dataset.jumpId;
-      render();
-    });
+    void saveResource(state.editorCollection, values, selected?.id ?? null);
   });
 }
 
@@ -609,10 +654,7 @@ async function saveResource(collection, values, currentId = null) {
     const id = payload.id ?? currentId;
     const response = await fetch(`${COLLECTIONS[collection].path}/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      headers: {
-        ...adminHeaders(),
-        'content-type': 'application/json',
-      },
+      headers: buildJsonAdminHeaders(state.adminKey),
       body: JSON.stringify(payload),
     });
     if (response.status === 401) {
@@ -627,7 +669,7 @@ async function saveResource(collection, values, currentId = null) {
     showToast('Stored successfully', `${collection} '${id}' stored at revision ${result.revision}.`, 'success');
     await refreshAll();
     state.activeCollection = collection;
-    state.selectedId = id;
+    Object.assign(state, finishEditorFlow());
     render();
   } catch (error) {
     showToast('Save failed', error.message, 'danger');
@@ -652,43 +694,11 @@ async function deleteResource(collection, id) {
     showToast('Deleted successfully', `${collection} '${id}' deleted at revision ${result.revision}.`, 'success');
     closeModal();
     await refreshAll();
-    state.selectedId = null;
+    Object.assign(state, finishEditorFlow());
     render();
   } catch (error) {
     showToast('Delete failed', error.message, 'danger');
   }
-}
-
-function showCreateModal(collection, initialValues = null) {
-  const defaults = initialValues ?? defaultFormValues(collection);
-  modalRoot.classList.add('open');
-  modalRoot.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="create-title">
-      <div class="detail-header">
-        <div>
-          <h2 id="create-title">Create ${COLLECTIONS[collection].label.slice(0, -1) || COLLECTIONS[collection].label}</h2>
-          <p class="muted">Writes directly to ${COLLECTIONS[collection].path}/:id using the current admin key.</p>
-        </div>
-        <button class="ghost-button" type="button" id="close-modal-button">Close</button>
-      </div>
-      <form id="create-form" class="form-grid">
-        ${renderFormFields(collection, defaults)}
-        <div class="form-actions">
-          <button class="button" type="submit">Create</button>
-          <button class="secondary-button" type="button" id="cancel-create-button">Cancel</button>
-        </div>
-      </form>
-    </div>
-  `;
-  modalRoot.querySelector('#close-modal-button')?.addEventListener('click', closeModal);
-  modalRoot.querySelector('#cancel-create-button')?.addEventListener('click', closeModal);
-  modalRoot.querySelector('#create-form')?.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const values = Object.fromEntries(formData.entries());
-    closeModal();
-    void saveResource(collection, values);
-  });
 }
 
 function showDeleteModal(collection, id) {
@@ -749,6 +759,15 @@ function adminHeaders() {
   return headers;
 }
 
+export function buildJsonAdminHeaders(adminKey) {
+  const headers = new Headers();
+  if (adminKey) {
+    headers.set('x-admin-key', adminKey);
+  }
+  headers.set('content-type', 'application/json');
+  return headers;
+}
+
 function handleUnauthorized() {
   state.adminKeyValid = false;
   state.connectionState = 'idle';
@@ -757,19 +776,23 @@ function handleUnauthorized() {
 }
 
 export async function validateAdminKey(adminKey, fetchImpl = fetch) {
-  const response = await fetchImpl('/admin/providers', {
-    headers: { 'x-admin-key': adminKey.trim() },
-  });
+  try {
+    const response = await fetchImpl(COLLECTIONS.providers.path, {
+      headers: { 'x-admin-key': adminKey.trim() },
+    });
 
-  if (response.ok) {
-    return { valid: true, message: '' };
+    if (response.ok) {
+      return { valid: true, message: '' };
+    }
+
+    if (response.status === 401) {
+      return { valid: false, message: 'Invalid admin key. Please try again.' };
+    }
+
+    return { valid: false, message: `Admin API validation failed: ${await extractError(response)}` };
+  } catch (error) {
+    return { valid: false, message: `Admin API validation failed: ${error.message}` };
   }
-
-  if (response.status === 401) {
-    return { valid: false, message: 'Invalid admin key. Please try again.' };
-  }
-
-  return { valid: false, message: `Admin API validation failed: ${await extractError(response)}` };
 }
 
 async function extractError(response) {
@@ -934,6 +957,71 @@ export function nextAdminRefreshState(adminKey) {
     return { shouldRefresh: false, connectionState: 'idle' };
   }
   return { shouldRefresh: true, connectionState: 'loading' };
+}
+
+export function nextAdminUiMode({ adminKey, adminKeyValid, draftMode }) {
+  if (!adminKey || !adminKey.trim() || !adminKeyValid) {
+    return { locked: true, mode: 'locked' };
+  }
+
+  return {
+    locked: false,
+    mode: draftMode ? 'editing' : 'listing',
+  };
+}
+
+export function nextDetailMode({ draftMode, editingId }) {
+  return draftMode === 'create' || (draftMode === 'edit' && editingId) ? 'editing' : 'listing';
+}
+
+export function startEditAction(collection, raw) {
+  return {
+    draftMode: 'edit',
+    editorCollection: collection,
+    editorId: raw.id,
+    editorValues: toFormValues(collection, raw),
+  };
+}
+
+export function startCreateAction(collection) {
+  return {
+    draftMode: 'create',
+    editorCollection: collection,
+    editorId: null,
+    editorValues: defaultFormValues(collection),
+  };
+}
+
+export function buildRowActions(collection, id) {
+  return [
+    { kind: 'edit', collection, id },
+    { kind: 'delete', collection, id },
+  ];
+}
+
+export function buildReferenceOptions(collection, data) {
+  if (collection === 'models') {
+    return {
+      provider_id: data.providers.map((item) => item.id),
+      policy_id: data.policies.map((item) => item.id),
+    };
+  }
+  if (collection === 'providers') {
+    return { policy_id: data.policies.map((item) => item.id) };
+  }
+  if (collection === 'apikeys') {
+    return { policy_id: data.policies.map((item) => item.id) };
+  }
+  return {};
+}
+
+export function finishEditorFlow() {
+  return {
+    draftMode: null,
+    editorCollection: null,
+    editorId: null,
+    editorValues: null,
+  };
 }
 
 export function adminKeyStorageMode() {
@@ -1187,18 +1275,4 @@ export function buildDeleteImpact(collection, id, data) {
 
 if (hasBrowserDom) {
   init();
-}
-export function nextAdminUiMode({ adminKey, adminKeyValid, draftMode }) {
-  if (!adminKey || !adminKey.trim() || !adminKeyValid) {
-    return { locked: true, mode: 'locked' };
-  }
-
-  return {
-    locked: false,
-    mode: draftMode ? 'editing' : 'listing',
-  };
-}
-
-export function nextDetailMode({ draftMode, editingId }) {
-  return draftMode === 'create' || (draftMode === 'edit' && editingId) ? 'editing' : 'listing';
 }

@@ -1,15 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   adminKeyStorageMode,
+  buildRowActions,
   buildDeleteImpact,
+  buildJsonAdminHeaders,
+  buildReferenceOptions,
   buildResourcePayload,
   deriveRelationshipModel,
+  finishEditorFlow,
   nextAdminUiMode,
   nextAdminRefreshState,
   nextDetailMode,
+  shouldRefreshOnInit,
+  restoreAdminKeyValidity,
   maskApiKey,
+  renderEditorSummary,
+  renderField,
+  startCreateAction,
+  startEditAction,
   validateAdminKey,
 } from './app.mjs';
 
@@ -139,6 +150,16 @@ test('admin key persistence stays session-scoped', () => {
   assert.equal(adminKeyStorageMode(), 'session');
 });
 
+test('stored admin key restores validated state after refresh', () => {
+  assert.equal(restoreAdminKeyValidity(''), false);
+  assert.equal(restoreAdminKeyValidity('change-me-admin-key'), true);
+});
+
+test('restored valid admin key triggers initial refresh', () => {
+  assert.equal(shouldRefreshOnInit({ adminKey: '', adminKeyValid: false }), false);
+  assert.equal(shouldRefreshOnInit({ adminKey: 'change-me-admin-key', adminKeyValid: true }), true);
+});
+
 test('admin lock state requires successful validation before entering listing mode', () => {
   assert.deepEqual(nextAdminUiMode({ adminKey: '', adminKeyValid: false, draftMode: null }), {
     locked: true,
@@ -171,6 +192,13 @@ test('admin key validation probe targets providers list with x-admin-key header'
   assert.equal(captured.options.headers['x-admin-key'], 'change-me-admin-key');
 });
 
+test('json admin headers keep x-admin-key when adding content-type', () => {
+  const headers = buildJsonAdminHeaders('change-me-admin-key');
+
+  assert.equal(headers.get('x-admin-key'), 'change-me-admin-key');
+  assert.equal(headers.get('content-type'), 'application/json');
+});
+
 test('admin key validation keeps modal open on unauthorized response', async () => {
   const result = await validateAdminKey('bad-key', async () => ({
     ok: false,
@@ -181,4 +209,110 @@ test('admin key validation keeps modal open on unauthorized response', async () 
 
   assert.equal(result.valid, false);
   assert.match(result.message, /invalid admin key/i);
+});
+
+test('admin key validation converts rejected fetch into invalid result', async () => {
+  const result = await validateAdminKey('change-me-admin-key', async () => {
+    throw new Error('network down');
+  });
+
+  assert.equal(result.valid, false);
+  assert.match(result.message, /network down/i);
+});
+
+test('startEditAction opens editor state for an existing resource', () => {
+  const next = startEditAction('models', {
+    id: 'gpt-4o-mini',
+    provider_id: 'openai',
+    upstream_model: 'gpt-4o-mini',
+    policy_id: null,
+    rate_limit: null,
+    cache: null,
+  });
+
+  assert.equal(next.draftMode, 'edit');
+  assert.equal(next.editorCollection, 'models');
+  assert.equal(next.editorId, 'gpt-4o-mini');
+});
+
+test('startCreateAction opens editor state with default values', () => {
+  const next = startCreateAction('providers');
+
+  assert.equal(next.draftMode, 'create');
+  assert.equal(next.editorCollection, 'providers');
+  assert.equal(next.editorId, null);
+  assert.equal(typeof next.editorValues, 'object');
+});
+
+test('buildRowActions exposes edit and delete actions only', () => {
+  assert.deepEqual(buildRowActions('providers', 'openai'), [
+    { kind: 'edit', collection: 'providers', id: 'openai' },
+    { kind: 'delete', collection: 'providers', id: 'openai' },
+  ]);
+});
+
+test('editor summary does not include relations section markers', () => {
+  const html = renderEditorSummary('models', {
+    id: 'gpt-4o-mini',
+    raw: {
+      id: 'gpt-4o-mini',
+      provider_id: 'openai',
+      upstream_model: 'gpt-4o-mini',
+      policy_id: null,
+      rate_limit: null,
+      cache: null,
+    },
+    status: { kind: 'valid', label: 'Valid', message: '' },
+    dependsOn: [],
+    referencedBy: [],
+  });
+
+  assert.doesNotMatch(html, /Relations/i);
+});
+
+test('buildReferenceOptions returns provider and policy suggestions for model forms', () => {
+  const options = buildReferenceOptions('models', {
+    providers: [{ id: 'openai' }],
+    models: [],
+    apikeys: [],
+    policies: [{ id: 'standard' }],
+  });
+
+  assert.deepEqual(options.provider_id, ['openai']);
+  assert.deepEqual(options.policy_id, ['standard']);
+});
+
+test('reference fields keep custom values not present in suggestions', () => {
+  const field = renderField(
+    { name: 'provider_id', label: 'Provider ID', type: 'reference', options: ['openai'] },
+    'custom-provider',
+  );
+
+  assert.match(field, /value="custom-provider"/);
+  assert.match(field, /select/);
+  assert.match(field, /Manual value/);
+});
+
+test('finishEditorFlow resets editor state back to listing', () => {
+  assert.deepEqual(
+    finishEditorFlow({
+      draftMode: 'edit',
+      editorCollection: 'models',
+      editorId: 'gpt-4o-mini',
+      editorValues: { id: 'gpt-4o-mini' },
+    }),
+    {
+      draftMode: null,
+      editorCollection: null,
+      editorId: null,
+      editorValues: null,
+    },
+  );
+});
+
+test('workspace layout prevents empty list panel from stretching vertically', () => {
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+
+  assert.match(html, /\.workspace\s*\{[\s\S]*align-items:\s*start;/);
+  assert.match(html, /\.main\s*\{[\s\S]*align-content:\s*start;/);
 });

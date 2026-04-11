@@ -115,12 +115,12 @@
       .main {
         padding: 24px;
         display: grid;
+        align-content: start;
         gap: 20px;
       }
 
       .status-bar,
       .panel,
-      .detail-card,
       .toast {
         background: var(--surface);
         border: 1px solid rgba(124, 58, 237, 0.12);
@@ -172,13 +172,13 @@
 
       .workspace {
         display: grid;
-        grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.9fr);
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
         gap: 20px;
         min-height: 0;
       }
 
-      .panel,
-      .detail-card {
+      .panel {
         padding: 20px;
       }
 
@@ -282,7 +282,7 @@
       .table-header,
       .table-row {
         display: grid;
-        grid-template-columns: minmax(120px, 1.4fr) minmax(110px, 1fr) minmax(120px, 1fr) minmax(120px, 0.9fr) minmax(160px, 1.2fr);
+        grid-template-columns: minmax(120px, 1.4fr) minmax(110px, 1fr) minmax(120px, 1fr) minmax(120px, 0.9fr) minmax(160px, 1.2fr) minmax(180px, 0.9fr);
         gap: 12px;
         padding: 14px 16px;
         align-items: center;
@@ -310,16 +310,11 @@
         background: #faf8ff;
       }
 
-      .table-row.selected {
-        background: #f5f3ff;
-      }
-
-      .table-row button {
-        background: transparent;
-        border: 0;
-        padding: 0;
-        text-align: left;
-        color: inherit;
+      .row-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
       }
 
       .table-empty {
