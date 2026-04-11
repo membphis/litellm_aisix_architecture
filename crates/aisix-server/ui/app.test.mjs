@@ -10,6 +10,7 @@ import {
   nextAdminRefreshState,
   nextDetailMode,
   maskApiKey,
+  validateAdminKey,
 } from './app.mjs';
 
 test('buildResourcePayload normalizes provider form fields', () => {
@@ -154,4 +155,30 @@ test('editor mode only opens for explicit create or edit actions', () => {
   assert.equal(nextDetailMode({ draftMode: null, editingId: null }), 'listing');
   assert.equal(nextDetailMode({ draftMode: 'create', editingId: null }), 'editing');
   assert.equal(nextDetailMode({ draftMode: 'edit', editingId: 'gpt-4o-mini' }), 'editing');
+});
+
+test('admin key validation probe targets providers list with x-admin-key header', async () => {
+  let captured;
+  const fetchImpl = async (url, options) => {
+    captured = { url, options };
+    return { ok: true, json: async () => [] };
+  };
+
+  const result = await validateAdminKey('change-me-admin-key', fetchImpl);
+
+  assert.equal(result.valid, true);
+  assert.equal(captured.url, '/admin/providers');
+  assert.equal(captured.options.headers['x-admin-key'], 'change-me-admin-key');
+});
+
+test('admin key validation keeps modal open on unauthorized response', async () => {
+  const result = await validateAdminKey('bad-key', async () => ({
+    ok: false,
+    status: 401,
+    headers: new Headers(),
+    text: async () => 'unauthorized',
+  }));
+
+  assert.equal(result.valid, false);
+  assert.match(result.message, /invalid admin key/i);
 });

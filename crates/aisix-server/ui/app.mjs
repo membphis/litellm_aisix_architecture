@@ -98,6 +98,9 @@ function adminKeyStorage() {
 
 const state = {
   adminKey: adminKeyStorage()?.getItem(ADMIN_KEY_STORAGE_KEY) ?? '',
+  adminKeyValid: false,
+  adminKeyError: '',
+  isValidatingAdminKey: false,
   activeCollection: 'providers',
   data: {
     providers: [],
@@ -111,6 +114,10 @@ const state = {
   selectedId: null,
   formMode: 'create',
   editingId: null,
+  draftMode: null,
+  editorCollection: null,
+  editorValues: null,
+  editorId: null,
   revealMap: new Map(),
   connectionState: 'idle',
   lastRefreshed: null,
@@ -126,13 +133,6 @@ function init() {
     return;
   }
   render();
-  const next = nextAdminRefreshState(state.adminKey);
-  state.connectionState = next.connectionState;
-  if (next.shouldRefresh) {
-    void refreshAll();
-  } else {
-    render();
-  }
 }
 
 function render() {
@@ -154,11 +154,6 @@ function render() {
           <h1>AISIX Control Plane</h1>
           <p>Embedded admin UI for stored config, relationships, and runtime validity hints.</p>
         </div>
-        <label>
-          Admin Key
-          <input id="admin-key-input" type="password" placeholder="x-admin-key" value="${escapeHtml(state.adminKey)}" />
-          <small>Stored in sessionStorage for this browser tab only.</small>
-        </label>
         <div class="nav" style="margin-top: 18px;">
           ${Object.entries(COLLECTIONS)
             .map(
@@ -214,12 +209,39 @@ function render() {
           </div>
         </section>
       </main>
+      ${!state.adminKeyValid ? renderAdminKeyGate() : ''}
     </div>
   `;
 
   bindGlobalEvents();
   bindTableEvents(items);
   bindDetailEvents(selected);
+}
+
+function renderAdminKeyGate() {
+  return `
+    <div class="modal-backdrop open">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="admin-key-title">
+        <div class="detail-header">
+          <div>
+            <h2 id="admin-key-title">Enter Admin Key</h2>
+            <p class="muted">A valid admin key is required before the control plane can load.</p>
+          </div>
+        </div>
+        <form id="admin-key-form" class="form-grid">
+          <label>
+            Admin Key
+            <input id="admin-key-input" name="admin_key" type="password" placeholder="x-admin-key" value="${escapeHtml(state.adminKey)}" required />
+            <small>Stored in sessionStorage for this browser tab only.</small>
+          </label>
+          ${state.adminKeyError ? `<div class="badge danger">${escapeHtml(state.adminKeyError)}</div>` : ''}
+          <div class="form-actions">
+            <button class="button" type="submit" ${state.isValidatingAdminKey ? 'disabled' : ''}>${state.isValidatingAdminKey ? 'Validating...' : 'Validate'}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
 }
 
 function renderTable(collection, items) {
@@ -407,13 +429,30 @@ function renderField(field, value) {
   }
 
 function bindGlobalEvents() {
-  document.querySelector('#admin-key-input')?.addEventListener('change', (event) => {
-    state.adminKey = event.target.value.trim();
-    const storage = adminKeyStorage();
-    if (storage) {
-      storage.setItem(ADMIN_KEY_STORAGE_KEY, state.adminKey);
+  document.querySelector('#admin-key-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const adminKey = String(formData.get('admin_key') ?? '').trim();
+
+    state.adminKey = adminKey;
+    state.isValidatingAdminKey = true;
+    state.adminKeyError = '';
+    render();
+
+    const result = await validateAdminKey(adminKey);
+    state.isValidatingAdminKey = false;
+
+    if (!result.valid) {
+      state.adminKeyValid = false;
+      state.adminKeyError = result.message;
+      render();
+      return;
     }
-    void refreshAll();
+
+    adminKeyStorage()?.setItem(ADMIN_KEY_STORAGE_KEY, adminKey);
+    state.adminKeyValid = true;
+    state.adminKeyError = '';
+    await refreshAll();
   });
 
   document.querySelectorAll('[data-nav]').forEach((button) => {
@@ -515,6 +554,12 @@ function bindDetailEvents(selected) {
 }
 
 async function refreshAll() {
+  if (!state.adminKeyValid) {
+    state.connectionState = 'idle';
+    render();
+    return;
+  }
+
   const next = nextAdminRefreshState(state.adminKey);
   state.connectionState = next.connectionState;
   if (!next.shouldRefresh) {
@@ -535,6 +580,9 @@ async function refreshAll() {
     state.lastRefreshed = Date.now();
     render();
   } catch (error) {
+    if (!state.adminKeyValid) {
+      return;
+    }
     state.connectionState = 'error';
     showToast('Connection error', error.message, 'danger');
     render();
@@ -545,6 +593,10 @@ async function fetchCollection(collection) {
   const response = await fetch(COLLECTIONS[collection].path, {
     headers: adminHeaders(),
   });
+  if (response.status === 401) {
+    handleUnauthorized();
+    throw new Error('Invalid admin key. Please try again.');
+  }
   if (!response.ok) {
     throw new Error(`Failed to load ${collection}: ${await extractError(response)}`);
   }
@@ -563,6 +615,10 @@ async function saveResource(collection, values, currentId = null) {
       },
       body: JSON.stringify(payload),
     });
+    if (response.status === 401) {
+      handleUnauthorized();
+      throw new Error('Invalid admin key. Please try again.');
+    }
     if (!response.ok) {
       throw new Error(await extractError(response));
     }
@@ -584,6 +640,10 @@ async function deleteResource(collection, id) {
       method: 'DELETE',
       headers: adminHeaders(),
     });
+    if (response.status === 401) {
+      handleUnauthorized();
+      throw new Error('Invalid admin key. Please try again.');
+    }
     if (!response.ok) {
       throw new Error(await extractError(response));
     }
@@ -687,6 +747,29 @@ function adminHeaders() {
     headers.set('x-admin-key', state.adminKey);
   }
   return headers;
+}
+
+function handleUnauthorized() {
+  state.adminKeyValid = false;
+  state.connectionState = 'idle';
+  state.adminKeyError = 'Admin key expired or is invalid. Please enter it again.';
+  render();
+}
+
+export async function validateAdminKey(adminKey, fetchImpl = fetch) {
+  const response = await fetchImpl('/admin/providers', {
+    headers: { 'x-admin-key': adminKey.trim() },
+  });
+
+  if (response.ok) {
+    return { valid: true, message: '' };
+  }
+
+  if (response.status === 401) {
+    return { valid: false, message: 'Invalid admin key. Please try again.' };
+  }
+
+  return { valid: false, message: `Admin API validation failed: ${await extractError(response)}` };
 }
 
 async function extractError(response) {
@@ -1119,4 +1202,3 @@ export function nextAdminUiMode({ adminKey, adminKeyValid, draftMode }) {
 export function nextDetailMode({ draftMode, editingId }) {
   return draftMode === 'create' || (draftMode === 'edit' && editingId) ? 'editing' : 'listing';
 }
-
