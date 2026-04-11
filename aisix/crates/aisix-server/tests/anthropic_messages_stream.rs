@@ -13,7 +13,10 @@ use axum::{
     http::{Request, StatusCode},
 };
 use http_body_util::BodyExt;
-use hyper::{body::{Bytes, Incoming}, service::service_fn};
+use hyper::{
+    body::{Bytes, Incoming},
+    service::service_fn,
+};
 use hyper_util::rt::TokioIo;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -22,7 +25,8 @@ use tower::ServiceExt;
 async fn anthropic_messages_stream_returns_expected_event_sequence() {
     let upstream = spawn_openai_stream_mock(StreamMockResponse::LfSuccessWithUsage).await;
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
+        let app =
+            aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
         app.oneshot(anthropic_stream_request()).await.unwrap()
     })
     .await;
@@ -40,8 +44,14 @@ async fn anthropic_messages_stream_returns_expected_event_sequence() {
     let text = String::from_utf8(body.to_vec()).unwrap();
 
     assert!(text.contains("event: message_start"), "body was {text:?}");
-    assert!(text.contains("event: content_block_start"), "body was {text:?}");
-    assert!(text.contains("event: content_block_delta"), "body was {text:?}");
+    assert!(
+        text.contains("event: content_block_start"),
+        "body was {text:?}"
+    );
+    assert!(
+        text.contains("event: content_block_delta"),
+        "body was {text:?}"
+    );
     assert!(text.contains("event: message_delta"), "body was {text:?}");
     assert!(text.contains("event: message_stop"), "body was {text:?}");
 }
@@ -50,7 +60,8 @@ async fn anthropic_messages_stream_returns_expected_event_sequence() {
 async fn anthropic_messages_stream_converts_upstream_json_errors() {
     let upstream = spawn_openai_stream_mock(StreamMockResponse::JsonError).await;
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
+        let app =
+            aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
         app.oneshot(anthropic_stream_request()).await.unwrap()
     })
     .await;
@@ -233,7 +244,9 @@ async fn spawn_openai_stream_mock(response_kind: StreamMockResponse) -> MockUpst
                         hyper::Response::builder()
                             .status(StatusCode::OK)
                             .header("content-type", "text/event-stream")
-                            .body(http_body_util::Full::new(Bytes::from_static(response_body.as_bytes())))
+                            .body(http_body_util::Full::new(Bytes::from_static(
+                                response_body.as_bytes(),
+                            )))
                             .unwrap()
                     }
                     StreamMockResponse::JsonError => {

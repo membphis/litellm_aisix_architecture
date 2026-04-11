@@ -43,7 +43,7 @@ mod tests {
         counter.inc();
 
         let encoded = encode_registry(&registry).unwrap();
-        assert!(encoded.contains(&metric_name));
+        assert!(encoded.contains(metric_name));
         assert!(encoded.contains("test counter"));
     }
 }

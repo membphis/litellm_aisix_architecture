@@ -18,12 +18,15 @@ use hyper::{
     service::service_fn,
 };
 use hyper_util::rt::TokioIo;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 mod support {
     pub mod etcd {
-        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../aisix-config/tests/support/etcd.rs"));
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../aisix-config/tests/support/etcd.rs"
+        ));
     }
 }
 
@@ -90,7 +93,11 @@ async fn admin_can_create_provider_model_and_apikey_then_gateway_uses_reloaded_s
 
         let response = poll_until_response(|| {
             let app = app.clone();
-            async move { app.oneshot(chat_request("live-token", "gpt-4o-mini")).await.unwrap() }
+            async move {
+                app.oneshot(chat_request("live-token", "gpt-4o-mini"))
+                    .await
+                    .unwrap()
+            }
         })
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -110,8 +117,7 @@ async fn admin_put_seeds_from_live_snapshot_and_advances_revision() {
     let upstream = spawn_openai_mock().await;
 
     with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let fixture = LiveEtcdTestApp::start_seeded(&upstream.base_url, None)
-            .await;
+        let fixture = LiveEtcdTestApp::start_seeded(&upstream.base_url, None).await;
         let app = fixture.router();
 
         let response = app
@@ -132,7 +138,10 @@ async fn admin_put_seeds_from_live_snapshot_and_advances_revision() {
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let json: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["revision"].as_i64().unwrap(), fixture.seeded_revision() + 1);
+        assert_eq!(
+            json["revision"].as_i64().unwrap(),
+            fixture.seeded_revision() + 1
+        );
 
         let old_key = app
             .clone()
@@ -143,7 +152,11 @@ async fn admin_put_seeds_from_live_snapshot_and_advances_revision() {
 
         let new_key = poll_until_response(|| {
             let app = app.clone();
-            async move { app.oneshot(chat_request("new-token", "gpt-4o-mini")).await.unwrap() }
+            async move {
+                app.oneshot(chat_request("new-token", "gpt-4o-mini"))
+                    .await
+                    .unwrap()
+            }
         })
         .await;
         assert_eq!(new_key.status(), StatusCode::OK);
@@ -186,10 +199,17 @@ async fn unrelated_admin_put_preserves_seeded_apikey_limit_config() {
             .unwrap();
         assert_eq!(put.status(), StatusCode::OK);
 
-        let second = poll_until_status(|| {
-            let app = app.clone();
-            async move { app.oneshot(chat_request("limited-token", "gpt-4o-mini")).await.unwrap() }
-        }, StatusCode::TOO_MANY_REQUESTS)
+        let second = poll_until_status(
+            || {
+                let app = app.clone();
+                async move {
+                    app.oneshot(chat_request("limited-token", "gpt-4o-mini"))
+                        .await
+                        .unwrap()
+                }
+            },
+            StatusCode::TOO_MANY_REQUESTS,
+        )
         .await;
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
 
@@ -226,28 +246,31 @@ async fn admin_requires_valid_x_admin_key() {
 
     let invalid = app
         .clone()
-        .oneshot(
-            admin_request_with_key(
-                "PUT",
-                "/admin/providers/openai",
-                Some(json!({
-                    "id": "openai",
-                    "kind": "openai",
-                    "base_url": "http://127.0.0.1:1",
-                    "auth": {"secret_ref": "env:OPENAI_API_KEY"},
-                    "policy_id": null,
-                    "rate_limit": null
-                })),
-                Some("wrong-key"),
-            ),
-        )
+        .oneshot(admin_request_with_key(
+            "PUT",
+            "/admin/providers/openai",
+            Some(json!({
+                "id": "openai",
+                "kind": "openai",
+                "base_url": "http://127.0.0.1:1",
+                "auth": {"secret_ref": "env:OPENAI_API_KEY"},
+                "policy_id": null,
+                "rate_limit": null
+            })),
+            Some("wrong-key"),
+        ))
         .await
         .unwrap();
     assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
 
     let missing_get = app
         .clone()
-        .oneshot(admin_request_with_key("GET", "/admin/providers/openai", None, None))
+        .oneshot(admin_request_with_key(
+            "GET",
+            "/admin/providers/openai",
+            None,
+            None,
+        ))
         .await
         .unwrap();
     assert_eq!(missing_get.status(), StatusCode::UNAUTHORIZED);
@@ -386,7 +409,10 @@ async fn admin_rejects_ids_with_path_separators() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"]["message"], "admin resource id 'a/b' must not contain '/'");
+    assert_eq!(
+        json["error"]["message"],
+        "admin resource id 'a/b' must not contain '/'"
+    );
 }
 
 #[tokio::test]
@@ -878,7 +904,11 @@ async fn admin_update_reloads_key_rate_limit_without_poisoning_current_snapshot(
 
         let second = poll_until_response(|| {
             let app = app.clone();
-            async move { app.oneshot(chat_request("live-token", "gpt-4o-mini")).await.unwrap() }
+            async move {
+                app.oneshot(chat_request("live-token", "gpt-4o-mini"))
+                    .await
+                    .unwrap()
+            }
         })
         .await;
         assert_eq!(second.status(), StatusCode::OK);
@@ -900,10 +930,17 @@ async fn admin_update_reloads_key_rate_limit_without_poisoning_current_snapshot(
             .unwrap();
         assert_eq!(invalid_update.status(), StatusCode::OK);
 
-        let third = poll_until_status(|| {
-            let app = app.clone();
-            async move { app.oneshot(chat_request("live-token", "gpt-4o-mini")).await.unwrap() }
-        }, StatusCode::TOO_MANY_REQUESTS)
+        let third = poll_until_status(
+            || {
+                let app = app.clone();
+                async move {
+                    app.oneshot(chat_request("live-token", "gpt-4o-mini"))
+                        .await
+                        .unwrap()
+                }
+            },
+            StatusCode::TOO_MANY_REQUESTS,
+        )
         .await;
         assert_eq!(third.status(), StatusCode::TOO_MANY_REQUESTS);
 
@@ -1065,7 +1102,9 @@ async fn seed_limited_runtime_key_in_etcd(harness: &support::etcd::EtcdHarness) 
         .expect("limited apikey fixture should be written")
 }
 
-fn test_startup_config(etcd: aisix_config::startup::EtcdConfig) -> aisix_config::startup::StartupConfig {
+fn test_startup_config(
+    etcd: aisix_config::startup::EtcdConfig,
+) -> aisix_config::startup::StartupConfig {
     aisix_config::startup::StartupConfig {
         server: aisix_config::startup::ServerConfig {
             listen: "127.0.0.1:0".to_string(),

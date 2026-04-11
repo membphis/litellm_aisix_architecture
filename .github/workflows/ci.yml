@@ -18,22 +18,27 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache Cargo
+      - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            aisix/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('aisix/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('aisix/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
 
       - name: Check formatting
-        run: cargo fmt --manifest-path aisix/Cargo.toml -- --check
+        run: cargo fmt --manifest-path aisix/Cargo.toml --all -- --check
 
       - name: Clippy
-        run: cargo clippy --manifest-path aisix/Cargo.toml --all-targets -- -D warnings
+        run: |
+          rustc --version
+          cargo clippy --manifest-path aisix/Cargo.toml --all-targets -- -D warnings 2>&1 | tee /tmp/clippy_output.txt
+          exit ${PIPESTATUS[0]}
 
   test:
     name: Test (unit + integration)
@@ -65,6 +70,9 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -119,6 +127,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install protoc
+        run: sudo apt-get install -y protobuf-compiler
+
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
@@ -144,7 +155,12 @@ jobs:
           done
 
       - name: Run smoke test
-        run: bash aisix/scripts/smoke-phase1.sh
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY not set, skipping live smoke test"
+            exit 0
+          fi
+          bash aisix/scripts/smoke-phase1.sh
 
       - name: Stop gateway
         if: always()

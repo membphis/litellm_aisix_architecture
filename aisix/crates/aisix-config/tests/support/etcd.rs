@@ -6,7 +6,7 @@ use std::{
 };
 
 use aisix_config::startup::EtcdConfig;
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 
 pub struct EtcdHarness {
@@ -75,7 +75,10 @@ impl EtcdHarness {
             .await
             .context("failed to put etcd fixture")?;
 
-        Ok(response.header().map(|header| header.revision()).unwrap_or(0))
+        Ok(response
+            .header()
+            .map(|header| header.revision())
+            .unwrap_or(0))
     }
 
     pub async fn get_json(&self, key: &str) -> Result<Option<serde_json::Value>> {
@@ -99,7 +102,10 @@ impl EtcdHarness {
             .await
             .context("failed to delete etcd fixture")?;
 
-        Ok(response.header().map(|header| header.revision()).unwrap_or(0))
+        Ok(response
+            .header()
+            .map(|header| header.revision())
+            .unwrap_or(0))
     }
 
     pub async fn compact(&self, revision: i64) -> Result<()> {
@@ -122,9 +128,8 @@ impl EtcdHarness {
     }
 
     pub fn unpause(&self) -> Result<()> {
-        run_docker(&["unpause", &self.container_name]).with_context(|| {
-            format!("failed to unpause etcd container {}", self.container_name)
-        })?;
+        run_docker(&["unpause", &self.container_name])
+            .with_context(|| format!("failed to unpause etcd container {}", self.container_name))?;
         Ok(())
     }
 

@@ -36,12 +36,11 @@ async fn run_messages(
     body: Bytes,
 ) -> Result<Response, GatewayError> {
     let version = protocol::anthropic::require_anthropic_version(&headers)?;
-    let request: AnthropicMessagesRequest = serde_json::from_slice(&body).map_err(|error| {
-        GatewayError {
+    let request: AnthropicMessagesRequest =
+        serde_json::from_slice(&body).map_err(|error| GatewayError {
             kind: ErrorKind::InvalidRequest,
             message: format!("invalid anthropic request body: {error}"),
-        }
-    })?;
+        })?;
     let snapshot = state.app.snapshot.load_full();
     let key_meta = authenticate_key(&headers, &snapshot.keys_by_token)?;
     let canonical = protocol::anthropic::into_canonical_request(request)?;
@@ -54,7 +53,9 @@ async fn run_messages(
     route_select::resolve(&mut ctx, &state)?;
     let _rate_limit_guard = rate_limit::check(&ctx, &state).await?;
 
-    if ctx.request.transport_mode() == TransportMode::Json && cache::cache_enabled_for_chat(&ctx, &state)? {
+    if ctx.request.transport_mode() == TransportMode::Json
+        && cache::cache_enabled_for_chat(&ctx, &state)?
+    {
         if let Some(response) = cache::lookup_chat(&mut ctx, &state)? {
             post_call::record_success(&ctx, &state).await;
             return Ok(response);
@@ -80,8 +81,14 @@ fn authenticate_key(
         .or_else(|| bearer_token(headers).ok())
         .ok_or_else(invalid_api_key)?;
 
-    let meta = keys_by_token.get(&token).cloned().ok_or_else(invalid_api_key)?;
-    if meta.expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
+    let meta = keys_by_token
+        .get(&token)
+        .cloned()
+        .ok_or_else(invalid_api_key)?;
+    if meta
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= Utc::now())
+    {
         return Err(invalid_api_key());
     }
 

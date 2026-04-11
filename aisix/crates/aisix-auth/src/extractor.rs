@@ -1,11 +1,14 @@
-use axum::async_trait;
-use chrono::Utc;
 use aisix_core::AppState;
 use aisix_types::{
     entities::KeyMeta,
     error::{ErrorKind, GatewayError},
 };
-use axum::{extract::{FromRef, FromRequestParts}, http::{header::AUTHORIZATION, request::Parts}};
+use axum::async_trait;
+use axum::{
+    extract::{FromRef, FromRequestParts},
+    http::{header::AUTHORIZATION, request::Parts},
+};
+use chrono::Utc;
 
 #[derive(Debug, Clone)]
 pub struct AuthenticatedKey {
@@ -21,10 +24,7 @@ where
 {
     type Rejection = GatewayError;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
         let token = bearer_token(parts);
         let token = token?;
@@ -35,7 +35,10 @@ where
             .cloned()
             .ok_or_else(invalid_api_key)?;
 
-        if meta.expires_at.is_some_and(|expires_at| expires_at <= Utc::now()) {
+        if meta
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= Utc::now())
+        {
             return Err(invalid_api_key());
         }
 

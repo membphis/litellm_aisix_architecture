@@ -47,7 +47,9 @@ impl RedisPool {
         let value = connection.integer_command(&["INCR", key]).await?;
         if value == 1 {
             let ttl = ttl_seconds.to_string();
-            let _ = connection.integer_command(&["EXPIRE", key, ttl.as_str()]).await?;
+            let _ = connection
+                .integer_command(&["EXPIRE", key, ttl.as_str()])
+                .await?;
         }
 
         Ok(value as u64)

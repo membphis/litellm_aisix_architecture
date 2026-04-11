@@ -13,16 +13,20 @@ use axum::{
     http::{HeaderMap, HeaderValue, Request, StatusCode},
 };
 use http_body_util::BodyExt;
-use hyper::{body::{Bytes, Incoming}, service::service_fn};
+use hyper::{
+    body::{Bytes, Incoming},
+    service::service_fn,
+};
 use hyper_util::rt::TokioIo;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn stream_chat_returns_valid_openai_sse() {
     let upstream = spawn_openai_stream_mock(StreamMockResponse::LfSuccess).await;
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
+        let app =
+            aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
 
         app.oneshot(stream_chat_request()).await.unwrap()
     })
@@ -48,14 +52,18 @@ async fn stream_chat_returns_valid_openai_sse() {
     let body = String::from_utf8(body.to_vec()).unwrap();
 
     assert!(body.contains("data: {"), "body was {body:?}");
-    assert!(body.trim_end().ends_with("data: [DONE]"), "body was {body:?}");
+    assert!(
+        body.trim_end().ends_with("data: [DONE]"),
+        "body was {body:?}"
+    );
 }
 
 #[tokio::test]
 async fn stream_chat_accepts_crlf_framed_upstream_sse() {
     let upstream = spawn_openai_stream_mock(StreamMockResponse::CrlfSuccess).await;
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
+        let app =
+            aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
 
         app.oneshot(stream_chat_request()).await.unwrap()
     })
@@ -74,14 +82,18 @@ async fn stream_chat_accepts_crlf_framed_upstream_sse() {
     let body = String::from_utf8(body.to_vec()).unwrap();
 
     assert!(body.contains("data: {"), "body was {body:?}");
-    assert!(body.trim_end().ends_with("data: [DONE]"), "body was {body:?}");
+    assert!(
+        body.trim_end().ends_with("data: [DONE]"),
+        "body was {body:?}"
+    );
 }
 
 #[tokio::test]
 async fn stream_chat_preserves_json_error_responses() {
     let upstream = spawn_openai_stream_mock(StreamMockResponse::JsonError).await;
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
+        let app =
+            aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
 
         app.oneshot(stream_chat_request()).await.unwrap()
     })
@@ -129,15 +141,28 @@ async fn stream_chat_records_and_exposes_usage_when_upstream_includes_it() {
         .expect("stream usage should be attached to response extensions");
     assert_eq!(usage.input_tokens, 12);
     assert_eq!(usage.output_tokens, 7);
-    assert_eq!(state.app.usage_recorder.total_for("usage:key:vk_123:input_tokens"), 12);
-    assert_eq!(state.app.usage_recorder.total_for("usage:key:vk_123:output_tokens"), 7);
+    assert_eq!(
+        state
+            .app
+            .usage_recorder
+            .total_for("usage:key:vk_123:input_tokens"),
+        12
+    );
+    assert_eq!(
+        state
+            .app
+            .usage_recorder
+            .total_for("usage:key:vk_123:output_tokens"),
+        7
+    );
 }
 
 #[tokio::test]
 async fn stream_chat_forces_sse_content_type_on_successful_normalized_responses() {
     let upstream = spawn_openai_stream_mock(StreamMockResponse::WrongContentTypeSuccess).await;
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
+        let app =
+            aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
 
         app.oneshot(stream_chat_request()).await.unwrap()
     })
@@ -487,7 +512,9 @@ async fn spawn_openai_stream_mock(response_kind: StreamMockResponse) -> MockUpst
                             .status(StatusCode::OK)
                             .header("content-type", "text/event-stream")
                             .header("content-length", response_body.len().to_string())
-                            .body(http_body_util::Full::new(Bytes::from_static(response_body.as_bytes())))
+                            .body(http_body_util::Full::new(Bytes::from_static(
+                                response_body.as_bytes(),
+                            )))
                             .unwrap()
                     }
                     StreamMockResponse::LfSuccessWithUsage => {
@@ -500,7 +527,9 @@ async fn spawn_openai_stream_mock(response_kind: StreamMockResponse) -> MockUpst
                             .status(StatusCode::OK)
                             .header("content-type", "text/event-stream")
                             .header("content-length", response_body.len().to_string())
-                            .body(http_body_util::Full::new(Bytes::from_static(response_body.as_bytes())))
+                            .body(http_body_util::Full::new(Bytes::from_static(
+                                response_body.as_bytes(),
+                            )))
                             .unwrap()
                     }
                     StreamMockResponse::CrlfSuccess => {
@@ -514,7 +543,9 @@ async fn spawn_openai_stream_mock(response_kind: StreamMockResponse) -> MockUpst
                             .status(StatusCode::OK)
                             .header("content-type", "text/event-stream")
                             .header("content-length", content_length)
-                            .body(http_body_util::Full::new(Bytes::from_static(response_body.as_bytes())))
+                            .body(http_body_util::Full::new(Bytes::from_static(
+                                response_body.as_bytes(),
+                            )))
                             .unwrap()
                     }
                     StreamMockResponse::WrongContentTypeSuccess => {
@@ -527,7 +558,9 @@ async fn spawn_openai_stream_mock(response_kind: StreamMockResponse) -> MockUpst
                             .status(StatusCode::OK)
                             .header("content-type", "application/json")
                             .header("content-length", response_body.len().to_string())
-                            .body(http_body_util::Full::new(Bytes::from_static(response_body.as_bytes())))
+                            .body(http_body_util::Full::new(Bytes::from_static(
+                                response_body.as_bytes(),
+                            )))
                             .unwrap()
                     }
                     StreamMockResponse::JsonError => {
@@ -588,12 +621,21 @@ async fn spawn_anthropic_stream_mock() -> MockUpstream {
                 let body = request.into_body().collect().await.unwrap().to_bytes();
                 let json: Value = serde_json::from_slice(&body).unwrap();
                 assert_eq!(json["stream"], Value::Bool(true));
-                assert_eq!(json["model"], Value::String("claude-3-5-haiku-latest".to_string()));
+                assert_eq!(
+                    json["model"],
+                    Value::String("claude-3-5-haiku-latest".to_string())
+                );
                 assert_eq!(json["max_tokens"], 1024);
-                assert_eq!(json["system"], Value::String("You are concise.".to_string()));
-                assert_eq!(json["messages"], json!([
-                    {"role": "user", "content": "hello"}
-                ]));
+                assert_eq!(
+                    json["system"],
+                    Value::String("You are concise.".to_string())
+                );
+                assert_eq!(
+                    json["messages"],
+                    json!([
+                        {"role": "user", "content": "hello"}
+                    ])
+                );
 
                 let response_body = concat!(
                     "event: message_start\n",

@@ -35,7 +35,10 @@ impl CounterStore {
 
     pub async fn incr_total(&self, key: &str, amount: u64) -> u64 {
         let local_value = {
-            let mut totals = self.local_totals.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut totals = self
+                .local_totals
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let entry = totals.entry(key.to_string()).or_insert(0);
             *entry += amount;
             *entry

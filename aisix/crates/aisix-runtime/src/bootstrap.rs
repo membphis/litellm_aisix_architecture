@@ -1,10 +1,10 @@
-use anyhow::Result;
 use aisix_config::{
     startup::{CacheDefaultMode, StartupConfig},
     watcher::{initial_snapshot_handle, load_initial_snapshot, spawn_snapshot_watcher},
 };
 use aisix_core::AppState;
 use aisix_storage::RedisPool;
+use anyhow::Result;
 use tracing::info;
 
 pub async fn bootstrap(config: &StartupConfig) -> Result<AppState> {

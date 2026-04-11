@@ -23,7 +23,10 @@ async fn main() -> anyhow::Result<()> {
     let admin = aisix_server::admin::AdminState::from_startup_config(&config)
         .await
         .inspect_err(|error| log_startup_failure("admin initialization", error))?;
-    info!(admin_enabled = admin.is_some(), "admin initialization complete");
+    info!(
+        admin_enabled = admin.is_some(),
+        "admin initialization complete"
+    );
     log_gateway_starting_http_server(&config.server.listen, admin.is_some());
 
     aisix_server::app::serve(state, &config.server.listen, admin)

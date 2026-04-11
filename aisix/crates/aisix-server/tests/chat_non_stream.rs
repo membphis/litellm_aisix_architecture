@@ -4,7 +4,9 @@ use std::sync::{
 };
 
 use aisix_config::{
-    etcd_model::{CacheMode, CachePolicyConfig, ModelConfig, ProviderAuth, ProviderConfig, ProviderKind},
+    etcd_model::{
+        CacheMode, CachePolicyConfig, ModelConfig, ProviderAuth, ProviderConfig, ProviderKind,
+    },
     snapshot::CompiledSnapshot,
     watcher::initial_snapshot_handle,
 };
@@ -282,11 +284,17 @@ async fn non_stream_chat_hits_cache_when_globally_enabled_and_resources_inherit(
     .await;
 
     assert_eq!(
-        first.headers().get("x-aisix-cache-hit").and_then(|v| v.to_str().ok()),
+        first
+            .headers()
+            .get("x-aisix-cache-hit")
+            .and_then(|v| v.to_str().ok()),
         Some("false")
     );
     assert_eq!(
-        second.headers().get("x-aisix-cache-hit").and_then(|v| v.to_str().ok()),
+        second
+            .headers()
+            .get("x-aisix-cache-hit")
+            .and_then(|v| v.to_str().ok()),
         Some("true")
     );
     assert_eq!(capture.hits(), 1);
@@ -367,7 +375,11 @@ async fn model_cache_mode_overrides_provider_cache_mode() {
 
     let (first, second) = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
         let state = test_state(
-            snapshot_for_cache_modes(&upstream.base_url, Some(CacheMode::Enabled), Some(CacheMode::Disabled)),
+            snapshot_for_cache_modes(
+                &upstream.base_url,
+                Some(CacheMode::Enabled),
+                Some(CacheMode::Disabled),
+            ),
             true,
             false,
         );
@@ -391,7 +403,11 @@ fn test_state(
     default_cache_enabled: bool,
 ) -> aisix_server::app::ServerState {
     aisix_server::app::ServerState {
-        app: AppState::new(initial_snapshot_handle(snapshot), ready, default_cache_enabled),
+        app: AppState::new(
+            initial_snapshot_handle(snapshot),
+            ready,
+            default_cache_enabled,
+        ),
         providers: ProviderRegistry::default(),
         admin: None,
     }

@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::{
     codec::{JsonOutput, ProviderCodec, StreamOutput},
-    openai_sse::{OpenAiSseEvent, normalize_openai_chat_sse},
+    openai_sse::{normalize_openai_chat_sse, OpenAiSseEvent},
 };
 
 #[derive(Debug, Clone, Default)]
@@ -125,7 +125,9 @@ fn render_normalized_events(events: &[OpenAiSseEvent]) -> Bytes {
     Bytes::from(rendered)
 }
 
-fn strip_unsafe_body_headers(mut headers: reqwest::header::HeaderMap) -> reqwest::header::HeaderMap {
+fn strip_unsafe_body_headers(
+    mut headers: reqwest::header::HeaderMap,
+) -> reqwest::header::HeaderMap {
     headers.remove(reqwest::header::CONTENT_LENGTH);
     headers.remove(reqwest::header::TRANSFER_ENCODING);
     headers

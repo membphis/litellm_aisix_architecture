@@ -1,9 +1,6 @@
 use std::sync::{
-    Arc,
-    Mutex,
-    MutexGuard,
-    OnceLock,
     atomic::{AtomicUsize, Ordering},
+    Arc, Mutex, MutexGuard, OnceLock,
 };
 
 use aisix_config::{
@@ -24,7 +21,7 @@ use hyper::{
     service::service_fn,
 };
 use hyper_util::rt::TokioIo;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -49,7 +46,10 @@ async fn embeddings_reuse_the_json_pipeline() {
 
     assert_eq!(json["object"], "list");
     assert_eq!(capture.path(), Some("/v1/embeddings".to_string()));
-    assert_eq!(capture.model(), Some("text-embedding-3-small-upstream".to_string()));
+    assert_eq!(
+        capture.model(),
+        Some("text-embedding-3-small-upstream".to_string())
+    );
 }
 
 #[tokio::test]
@@ -259,10 +259,10 @@ async fn spawn_openai_mock(capture: Arc<CapturedRequest>) -> MockUpstream {
 
                         let body = request.into_body().collect().await.unwrap().to_bytes();
                         let json: Value = serde_json::from_slice(&body).unwrap();
-                        *capture.model.lock().unwrap() =
-                            json["model"].as_str().map(str::to_string);
+                        *capture.model.lock().unwrap() = json["model"].as_str().map(str::to_string);
 
-                        let response_body = if capture.path() == Some("/v1/embeddings".to_string()) {
+                        let response_body = if capture.path() == Some("/v1/embeddings".to_string())
+                        {
                             serde_json::to_vec(&json!({
                                 "object": "list",
                                 "data": [{

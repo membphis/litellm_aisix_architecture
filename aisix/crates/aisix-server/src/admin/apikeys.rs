@@ -1,12 +1,15 @@
 use aisix_config::etcd_model::ApiKeyConfig;
 use aisix_types::error::GatewayError;
 use axum::{
-    Json,
     extract::{Path, State},
     http::HeaderMap,
+    Json,
 };
 
-use crate::{admin::{auth::require_admin, ensure_path_matches_body_id, ensure_valid_resource_id}, app::ServerState};
+use crate::{
+    admin::{auth::require_admin, ensure_path_matches_body_id, ensure_valid_resource_id},
+    app::ServerState,
+};
 
 pub async fn put_apikey(
     State(state): State<ServerState>,
