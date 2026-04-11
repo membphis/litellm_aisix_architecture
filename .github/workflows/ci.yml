@@ -155,7 +155,12 @@ jobs:
           done
 
       - name: Run smoke test
-        run: bash aisix/scripts/smoke-phase1.sh
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY not set, skipping live smoke test"
+            exit 0
+          fi
+          bash aisix/scripts/smoke-phase1.sh
 
       - name: Stop gateway
         if: always()
