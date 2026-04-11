@@ -24,7 +24,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('aisix/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
@@ -32,12 +32,12 @@ jobs:
         run: sudo apt-get install -y protobuf-compiler
 
       - name: Check formatting
-        run: cargo fmt --manifest-path aisix/Cargo.toml --all -- --check
+        run: cargo fmt --all -- --check
 
       - name: Clippy
         run: |
           rustc --version
-          cargo clippy --manifest-path aisix/Cargo.toml --all-targets -- -D warnings 2>&1 | tee /tmp/clippy_output.txt
+          cargo clippy --all-targets -- -D warnings 2>&1 | tee /tmp/clippy_output.txt
           exit ${PIPESTATUS[0]}
 
   test:
@@ -80,13 +80,13 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            aisix/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('aisix/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
       - name: Run tests
-        run: cargo test --manifest-path aisix/Cargo.toml
+        run: cargo test
 
   smoke:
     name: Smoke test
@@ -136,17 +136,17 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            aisix/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('aisix/Cargo.lock') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
       - name: Build gateway (release)
-        run: cargo build --manifest-path aisix/Cargo.toml --release -p aisix-gateway
+        run: cargo build --release -p aisix-gateway
 
       - name: Start gateway
         run: |
-          ./aisix/target/release/aisix-gateway aisix/config/aisix-gateway.example.yaml &
+          ./target/release/aisix-gateway config/aisix-gateway.example.yaml &
           echo $! > /tmp/gateway.pid
           for i in $(seq 1 20); do
             curl -fsS http://127.0.0.1:4000/health && break
@@ -160,7 +160,7 @@ jobs:
             echo "OPENAI_API_KEY not set, skipping live smoke test"
             exit 0
           fi
-          bash aisix/scripts/smoke-phase1.sh
+          bash scripts/smoke-phase1.sh
 
       - name: Stop gateway
         if: always()

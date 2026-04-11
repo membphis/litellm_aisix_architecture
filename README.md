@@ -9,7 +9,7 @@ Minimal AI gateway with a built-in Admin API for phase 1.
 1. Start dependencies:
 
 ```bash
-docker compose up -d redis etcd
+docker compose -f docker-compose.yml up -d redis etcd
 ```
 
 2. Set the upstream provider secret used by the example provider config:
@@ -18,10 +18,19 @@ docker compose up -d redis etcd
 export OPENAI_API_KEY="your-openai-key"
 ```
 
+Any OpenAI-compatible upstream also works. For example, with DeepSeek you can keep `kind: "openai"` and override the smoke script inputs instead of changing gateway code:
+
+```bash
+export DEEPSEEK_API_KEY="your-deepseek-key"
+export AISIX_PROVIDER_BASE_URL="https://api.deepseek.com"
+export AISIX_PROVIDER_SECRET_REF="env:DEEPSEEK_API_KEY"
+export AISIX_UPSTREAM_MODEL="deepseek-chat"
+```
+
 3. Start the gateway with the example startup config:
 
 ```bash
-cargo run --manifest-path Cargo.toml -p aisix-gateway -- config/aisix-gateway.example.yaml
+cargo run -p aisix-gateway -- config/aisix-gateway.example.yaml
 ```
 
 Gateway startup now depends on reachable etcd. The gateway loads its initial runtime snapshot from etcd under the configured prefix and fails to start if etcd cannot be reached.
@@ -121,4 +130,4 @@ curl -fsS http://127.0.0.1:4000/v1/embeddings \
 
 ## Smoke Script
 
-Run `./scripts/smoke-phase1.sh` after the gateway is up. It exercises the etcd-backed flow by checking health, writing one provider/model/apikey through the Admin API, and sending one chat request through the gateway. Admin success in that flow means the write reached etcd; the new config becomes active only after the background watcher reloads a successfully compiled snapshot.
+Run `bash scripts/smoke-phase1.sh` after the gateway is up. It exercises the etcd-backed flow by checking health, writing one provider/model/apikey through the Admin API, and sending one chat request through the gateway. The script defaults to OpenAI, but it also accepts OpenAI-compatible overrides via `AISIX_PROVIDER_ID`, `AISIX_PROVIDER_BASE_URL`, `AISIX_PROVIDER_SECRET_REF`, and `AISIX_UPSTREAM_MODEL` so you can point it at DeepSeek or another compatible upstream. Admin success in that flow means the write reached etcd; the new config becomes active only after the background watcher reloads a successfully compiled snapshot.

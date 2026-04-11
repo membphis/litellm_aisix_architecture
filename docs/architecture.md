@@ -1494,10 +1494,10 @@ apikeys[0].allowed_models[1]:
 ### 目录布局
 
 ```
-aisix/
+.
 ├── Cargo.toml                    # workspace root
 ├── bin/                          # ── entry (L4) ──
-│   └── aisix-gateway/                   # binary entry point
+│   └── aisix-gateway/            # binary entry point
 │       └── main.rs
 └── crates/
     │
@@ -2307,22 +2307,22 @@ readinessProbe:
 
 ### 路由定义
 
-基础路径：`/aisix/admin`
+基础路径：`/admin`
 
 | HTTP 方法 | 路径 | 说明 |
 |-----------|------|------|
 | **Models** | | |
-| `GET` | `/aisix/admin/models` | 列出所有 models |
-| `POST` | `/aisix/admin/models` | 创建 model（自动生成 UUID） |
-| `GET` | `/aisix/admin/models/{id}` | 按 ID 获取单个 model |
-| `PUT` | `/aisix/admin/models/{id}` | 创建或更新 model（upsert） |
-| `DELETE` | `/aisix/admin/models/{id}` | 删除 model |
+| `GET` | `/admin/models` | 列出所有 models |
+| `POST` | `/admin/models` | 创建 model（自动生成 UUID） |
+| `GET` | `/admin/models/{id}` | 按 ID 获取单个 model |
+| `PUT` | `/admin/models/{id}` | 创建或更新 model（upsert） |
+| `DELETE` | `/admin/models/{id}` | 删除 model |
 | **API Keys** | | |
-| `GET` | `/aisix/admin/apikeys` | 列出所有 API keys |
-| `POST` | `/aisix/admin/apikeys` | 创建 API key（自动生成 UUID） |
-| `GET` | `/aisix/admin/apikeys/{id}` | 按 ID 获取单个 API key |
-| `PUT` | `/aisix/admin/apikeys/{id}` | 创建或更新 API key（upsert） |
-| `DELETE` | `/aisix/admin/apikeys/{id}` | 删除 API key |
+| `GET` | `/admin/apikeys` | 列出所有 API keys |
+| `POST` | `/admin/apikeys` | 创建 API key（自动生成 UUID） |
+| `GET` | `/admin/apikeys/{id}` | 按 ID 获取单个 API key |
+| `PUT` | `/admin/apikeys/{id}` | 创建或更新 API key（upsert） |
+| `DELETE` | `/admin/apikeys/{id}` | 删除 API key |
 
 ### 认证方式
 

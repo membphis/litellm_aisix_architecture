@@ -1,40 +1,39 @@
 # AISIX Project
 
-A Rust AI Gateway (data plane) with etcd-backed config sync. The repo root holds design docs and diagrams; the actual Rust workspace is under `aisix/`.
+A Rust AI Gateway (data plane) with etcd-backed config sync. The repository root is the Cargo workspace root, alongside docs and project metadata.
 
 ## Workspace Layout
 
 ```
-aisix/                          # Rust Cargo workspace
-  bin/aisix-gateway/            # Gateway binary entrypoint (main.rs)
-  crates/
-    aisix-types/                # Shared types: entities, request/response, stream events, errors
-    aisix-core/                 # App state (ArcSwap snapshot holder), request context
-    aisix-config/               # etcd loader, watcher, config compilation, snapshot
-    aisix-server/               # axum HTTP server: admin API, handlers, pipeline, stream proxy
-    aisix-auth/                 # Virtual key authentication
-    aisix-policy/               # Policy engine
-    aisix-ratelimit/            # Rate limiting (Redis-backed)
-    aisix-cache/                # Response caching
-    aisix-router/               # Model routing / load balancing
-    aisix-providers/            # Upstream provider codecs (OpenAI, etc.)
-    aisix-spend/                # Usage / spend tracking
-    aisix-storage/              # etcd / Redis client abstractions
-    aisix-observability/        # Metrics, logging
-    aisix-runtime/              # Bootstrap: wires crates together, starts server + watcher
-  config/                       # Example gateway YAML config
-  scripts/smoke-phase1.sh       # End-to-end smoke test
+bin/aisix-gateway/              # Gateway binary entrypoint (main.rs)
+crates/
+  aisix-types/                  # Shared types: entities, request/response, stream events, errors
+  aisix-core/                   # App state (ArcSwap snapshot holder), request context
+  aisix-config/                 # etcd loader, watcher, config compilation, snapshot
+  aisix-server/                 # axum HTTP server: admin API, handlers, pipeline, stream proxy
+  aisix-auth/                   # Virtual key authentication
+  aisix-policy/                 # Policy engine
+  aisix-ratelimit/              # Rate limiting (Redis-backed)
+  aisix-cache/                  # Response caching
+  aisix-router/                 # Model routing / load balancing
+  aisix-providers/              # Upstream provider codecs (OpenAI, etc.)
+  aisix-spend/                  # Usage / spend tracking
+  aisix-storage/                # etcd / Redis client abstractions
+  aisix-observability/          # Metrics, logging
+  aisix-runtime/                # Bootstrap: wires crates together, starts server + watcher
+config/                         # Example gateway YAML config
+scripts/smoke-phase1.sh         # End-to-end smoke test
 ```
 
 ## Developer Commands
 
-All Cargo commands must run with `--manifest-path aisix/Cargo.toml` from the repo root:
+All Cargo commands run directly from the repository root:
 
 ```bash
-cargo build --manifest-path aisix/Cargo.toml
-cargo test --manifest-path aisix/Cargo.toml
-cargo clippy --manifest-path aisix/Cargo.toml -- -D warnings
-cargo run --manifest-path aisix/Cargo.toml -p aisix-gateway -- aisix/config/aisix-gateway.example.yaml
+cargo build
+cargo test
+cargo clippy -- -D warnings
+cargo run -p aisix-gateway -- config/aisix-gateway.example.yaml
 ```
 
 There is no separate lint/typecheck command; use `cargo clippy` and `cargo test`.
@@ -43,7 +42,7 @@ There is no separate lint/typecheck command; use `cargo clippy` and `cargo test`
 
 - **etcd** and **Redis** must be running before starting the gateway:
   ```bash
-  docker compose -f aisix/docker-compose.yml up -d redis etcd
+  docker compose -f docker-compose.yml up -d redis etcd
   ```
 - The gateway fails to start if etcd is unreachable (it loads initial snapshot from etcd).
 - Set `OPENAI_API_KEY` env var for upstream provider auth when using the example config.
@@ -58,18 +57,18 @@ There is no separate lint/typecheck command; use `cargo clippy` and `cargo test`
 ## Testing
 
 ```bash
-cargo test --manifest-path aisix/Cargo.toml                    # all tests
-cargo test --manifest-path aisix/Cargo.toml -p aisix-config    # single crate
+cargo test                    # all tests
+cargo test -p aisix-config    # single crate
 ```
 
 For smoke testing a running gateway:
 ```bash
-bash aisix/scripts/smoke-phase1.sh
+bash scripts/smoke-phase1.sh
 ```
 
 ## Docs
 
-- `aisix/README.md` — getting started guide with curl examples
-- `aisix/docs/admin-api.md` — Admin API reference (resources, semantics, error codes)
+- `README.md` — getting started guide with curl examples
+- `docs/admin-api.md` — Admin API reference (resources, semantics, error codes)
 - `docs/architecture.md` — full architecture design doc (Chinese)
 - `docs/litellm-feature-panorama.md` — LiteLLM feature panorama used as reference baseline
