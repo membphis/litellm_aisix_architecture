@@ -9,7 +9,7 @@ use axum::{
 };
 use tracing::info;
 
-use crate::{admin, handlers, health};
+use crate::{admin, handlers, health, ui};
 
 #[derive(Debug, Clone)]
 pub struct ServerState {
@@ -65,6 +65,8 @@ pub fn build_router(state: ServerState) -> Router {
                     .put(admin::policies::put_policy)
                     .delete(admin::policies::delete_policy),
             )
+            .route("/ui", get(ui::admin_ui_index))
+            .route("/ui/app.js", get(ui::admin_ui_app_js))
     } else {
         router
     };

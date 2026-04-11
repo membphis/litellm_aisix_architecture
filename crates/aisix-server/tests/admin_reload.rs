@@ -352,6 +352,64 @@ async fn admin_delete_missing_resources_return_not_found() {
 }
 
 #[tokio::test]
+async fn admin_ui_entrypoint_serves_html_shell() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app.oneshot(Request::builder().uri("/ui").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/html; charset=utf-8")
+    );
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("AISIX Control Plane"));
+    assert!(html.contains("/ui/app.js"));
+}
+
+#[tokio::test]
+async fn admin_ui_script_serves_browser_app() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app
+        .oneshot(Request::builder().uri("/ui/app.js").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/javascript; charset=utf-8")
+    );
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let script = String::from_utf8(body.to_vec()).unwrap();
+    assert!(script.contains("AISIX Control Plane"));
+    assert!(script.contains("/admin/providers"));
+}
+
+#[tokio::test]
+async fn admin_namespace_does_not_expose_ui_entrypoint() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app
+        .oneshot(Request::builder().uri("/admin/ui").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn admin_rejects_path_and_body_id_mismatch() {
     let fixture = LiveEtcdTestApp::start().await;
     let app = fixture.router();
