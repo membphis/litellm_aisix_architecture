@@ -356,7 +356,10 @@ async fn admin_ui_entrypoint_serves_html_shell() {
     let fixture = LiveEtcdTestApp::start().await;
     let app = fixture.router();
 
-    let response = app.oneshot(Request::builder().uri("/ui").body(Body::empty()).unwrap()).await.unwrap();
+    let response = app
+        .oneshot(Request::builder().uri("/ui").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -378,7 +381,12 @@ async fn admin_ui_script_serves_browser_app() {
     let app = fixture.router();
 
     let response = app
-        .oneshot(Request::builder().uri("/ui/app.js").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/ui/app.js")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -402,7 +410,12 @@ async fn admin_namespace_does_not_expose_ui_entrypoint() {
     let app = fixture.router();
 
     let response = app
-        .oneshot(Request::builder().uri("/admin/ui").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/admin/ui")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
