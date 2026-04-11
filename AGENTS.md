@@ -52,6 +52,8 @@ There is no separate lint/typecheck command; use `cargo clippy` and `cargo test`
 - **Immutable compiled snapshot + ArcSwap**: Config hot-reload with zero downtime. The watcher compiles a new snapshot from etcd and atomically swaps it in.
 - **Admin API writes to etcd, not runtime**: A successful Admin `PUT`/`DELETE` means etcd accepted the write. The background watcher applies it asynchronously. Invalid config that fails compilation does NOT affect the running snapshot.
 - **Admin auth**: All admin requests require `x-admin-key` header matching the config value.
+- **Admin listener split**: The Admin API and Admin UI share `server.admin_listen`; that admin port must not overlap with the data plane `server.listen` port.
+- **Admin key browser handling**: The Admin UI requires operator-entered admin keys and stores them only in browser session scope.
 - **Config prefix**: All etcd keys live under the configured prefix (default `/aisix`).
 
 ## Testing

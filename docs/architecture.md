@@ -31,21 +31,21 @@
 ### 配置同步
 
 ```
-  Control Plane ──▶ etcd Cluster ─────────────▶ AISIX Data Plane
-                                               (etcd watch)
+  Admin listener ──▶ etcd Cluster ────────────▶ AISIX Data Plane
+                                              (etcd watch)
 ```
 
 ### 整体架构
 
 ```
       ┌──────────────────────────────────────────────┐
-      │               Control Plane                  │
-      │      CLI / Admin API / Dashboard             │
+      │          AISIX Gateway (single binary)       │
+      │   data plane listener + admin listener       │
       └─────────────────────┬────────────────────────┘
-                            │
-                 ┌──────────┴──────────────┐
-                 │      etcd Cluster       │
-                 │    (source of truth)    │
+                            │ admin writes / etcd source of truth
+                  ┌──────────┴──────────────┐
+                  │      etcd Cluster       │
+                  │    (source of truth)    │
                  └──────────┬──────────────┘
                             │ etcd watch
          ┌──────────────────┼──────────────────┐
@@ -151,20 +151,21 @@
 当前代码刻意保持"无抽象、顺序调用"的风格（见 `run_pipeline`），
 正是为将来的改造保留清晰的边界，而非被过早的抽象所绑架。
 
-### 控制面（aisix-admin）
+### 控制面（Admin Listener）
 
-**aisix-admin** 是独立服务，与 aisix-gateway 完全分离：
+当前控制面不是独立 `aisix-admin` 进程，而是 `aisix-gateway` 单二进制中的独立 admin listener：
 
-| 维度 | aisix-admin（控制面） | aisix-gateway（数据面） |
-|------|----------------------|-----------------|
-| **职责** | 写 etcd / PostgreSQL；消费 UsageEvent 写入 PG | 只读 etcd；写结构化日志（UsageEvent） |
-| **API** | Admin REST API（CRUD 配置实体） | LLM Proxy API（/v1/...） |
-| **LLM 流量** | 不处理 | 全部处理 |
+| 维度 | Admin Listener（控制面） | Data Plane Listener（数据面） |
+|------|--------------------------|-------------------------------|
+| **职责** | 提供 Admin REST API + Admin UI，写入 etcd | 提供 `/v1/...` 代理流量，读取已编译快照 |
+| **端口** | `server.admin_listen` | `server.listen` |
+| **约束** | 与数据面端口不能重叠 | 不暴露 `/admin/...` 或 `/ui` |
 | **通信** | 写入 etcd | Watch etcd 变更 |
 
-两者通过 etcd 解耦：aisix-admin 写，aisix-gateway 读，互不直接调用。
+Admin API 与 Admin UI 共享同一个 admin 端口，浏览器控制面只是 Admin API 的人类界面。
+用户必须在浏览器中手动输入 admin key，浏览器只在当前 session 内保存该 key，关闭浏览器后丢失。
 
-aisix-admin 管理的实体包括：Provider 配置、Virtual Key、Team/Member、Model、限流策略、Guardrail 规则等。MVP 阶段可以直接通过 `etcdctl` 或 Admin API 写入；Dashboard 为可选扩展。
+当前控制面管理的实体包括：Provider、Model、API Key、Policy。MVP 阶段可以直接通过 `etcdctl`、Admin API 或嵌入式 Admin UI 写入；Dashboard 即内嵌 UI。
 
 ---
 
@@ -1314,13 +1315,14 @@ impl ErrorKind {
 ```yaml
 # aisix-gateway.yaml — 进程启动配置
 # 仅包含启动时静态所需内容。
-# Provider、Model、Virtual Key、Limits、Guardrail 等运行时配置
-# 均由 aisix-admin 写入 etcd，aisix-gateway 启动后通过 watch 动态加载。
+# Provider、Model、API Key、Policy 等运行时配置
+# 均由 admin listener 写入 etcd，aisix-gateway 启动后通过 watch 动态加载。
 
 server:
   listen: "0.0.0.0:4000"
+  admin_listen: "127.0.0.1:4001"
+  metrics_listen: "0.0.0.0:9090"
   request_body_limit_mb: 8
-  response_body_limit_mb: 64
 
 etcd:
   endpoints:
@@ -1333,7 +1335,6 @@ log:
 
 runtime:
   worker_threads: 4      # tokio worker 线程数，0 = CPU 核心数
-  max_blocking_threads: 64
 ```
 
 运行时配置（Provider、Model、API Key）的数据结构见下方 [etcd 数据模型](#etcd-数据模型)。
@@ -1363,9 +1364,7 @@ runtime:
   "id": "standard-tier",
   "rate_limit": {
     "rpm": 500,
-    "rpd": 5000,
     "tpm": 100000,
-    "tpd": 1000000,
     "concurrency": 10
   }
 }
@@ -1406,9 +1405,7 @@ runtime:
   "policy_id": "standard-tier",
   "rate_limit": {       // 内联限流覆盖 policy 定义（优先级更高）
     "rpm": 100,
-    "rpd": 1000,
     "tpm": 50000,
-    "tpd": 500000,
     "concurrency": 5
   }
 }
@@ -1648,8 +1645,8 @@ apikeys[0].allowed_models[1]:
 - etcd 配置源 + 热加载
 - 基础 Spend 追踪：记录请求 token 用量（input/output tokens）
 - 响应头：`x-aisix-provider`、`x-aisix-cache-hit`
-- **最小化 Admin HTTP API**：Provider / Model / Virtual Key 的 CRUD，默认内嵌于 aisix-gateway（开箱即用）。支持通过配置开关控制：开发/测试阶段启用内嵌 Admin API；生产环境可关闭 Admin API 或通过独立部署控制面（aisix-admin）来管理，以满足安全和隔离需求。Admin API 的具体 schema（路由、请求/响应格式、认证方式）参照 [api7/aisix](https://github.com/api7/aisix) 已有实现，本地代码位于 `git/aisix`（详见第十六章）
-- `/health`（liveness）+ `/ready`（readiness）HTTP 健康检查端点（复用 metrics 端口），确保 Kubernetes liveness/readiness probe 可用
+- **最小化 Admin HTTP API + Admin UI**：Provider / Model / API Key / Policy 的 CRUD，默认内嵌于 aisix-gateway，但运行在独立 admin listener 上（开箱即用）。Admin API 与 `/ui` 共用 `server.admin_listen`，且该端口不得与数据面 `server.listen` 重叠。浏览器侧 admin key 必须手动输入，并仅保存在当前 session 中。当前 schema 以 `docs/admin-api.md` 为准。
+- `/health`（liveness）+ `/ready`（readiness）HTTP 健康检查端点（挂在数据面 listener），确保 Kubernetes liveness/readiness probe 可用
 - etcd 运行时断连重连机制：watch 连接断开后自动重试重连，重连期间使用旧快照继续提供服务
 
 **预计工期：4-6 周**
@@ -2263,141 +2260,32 @@ async fn test_redis_failure_degrade_to_local() {
 
 ### 6. 健康检查端点（/health、/ready）
 
-**状态**：已在 Phase 1 中实现。以下为设计定义。
+**状态**：已在 Phase 1 中实现。以下描述当前实现行为。
 
 **端点定义**：
 
 | 端点 | 用途 | 成功状态码 | 失败状态码 | 检查内容 |
 |------|------|-----------|-----------|---------|
 | `GET /health` | Liveness probe | `200` | — | 进程存活即返回 200，不做任何依赖检查 |
-| `GET /ready` | Readiness probe | `200` | `503` | etcd 快照已加载 + Redis 连接可达 |
+| `GET /ready` | Readiness probe | `200` | `503` | 进程内 `state.app.ready` 为 true |
 
-**`/ready` 检查范围**：
+`/health` 与 `/ready` 当前都只返回 HTTP 状态码，不返回额外 JSON body。
 
-- `snapshot_loaded: bool` — 至少成功编译过一次 `CompiledSnapshot`（即 etcd 初始全量拉取 + 编译完成）
-- `redis_reachable: bool` — Redis `PING` 命令返回 `PONG`
-- 两个条件均满足时返回 `200`，任一不满足返回 `503`
-
-**响应体格式**（统一 JSON）：
-
-```json
-{
-  "status": "ok",
-  "checks": {
-    "snapshot_loaded": true,
-    "redis_reachable": true
-  }
-}
-```
-
-**部署建议**：复用 metrics 端口（与 Prometheus `/metrics` 共用同一 HTTP server），不单独绑定端口。Kubernetes 探针配置示例：
+**部署建议**：将 `/health` 和 `/ready` 打到数据面 listener。当前实现未在 `metrics_listen` 上提供这两个探针端点。Kubernetes 探针配置示例：
 
 ```yaml
 livenessProbe:
-  httpGet: { path: /health, port: 9090 }
+  httpGet: { path: /health, port: 4000 }
 readinessProbe:
-  httpGet: { path: /ready, port: 9090 }
+  httpGet: { path: /ready, port: 4000 }
 ```
 
 ---
 
-## 十六、Admin HTTP API 参考（基于 api7/aisix）
+## 十六、Admin HTTP API 参考
 
-> Phase 1 的 Admin HTTP API 直接参照 [api7/aisix](https://github.com/api7/aisix) 已有实现，本地代码位于 `git/aisix`。以下为关键设计摘要。
+当前实现中的 Admin API contract 以 `docs/admin-api.md` 为准。
 
-### 路由定义
+本章此前保留了一个基于外部参考稿的旧设计摘要，但它已经不再代表当前代码实现。当前网关只暴露四类资源：`providers`、`models`、`apikeys`、`policies`，并且集合路由只支持 `GET` / `PUT` / `DELETE`。
 
-基础路径：`/admin`
-
-| HTTP 方法 | 路径 | 说明 |
-|-----------|------|------|
-| **Models** | | |
-| `GET` | `/admin/models` | 列出所有 models |
-| `POST` | `/admin/models` | 创建 model（自动生成 UUID） |
-| `GET` | `/admin/models/{id}` | 按 ID 获取单个 model |
-| `PUT` | `/admin/models/{id}` | 创建或更新 model（upsert） |
-| `DELETE` | `/admin/models/{id}` | 删除 model |
-| **API Keys** | | |
-| `GET` | `/admin/apikeys` | 列出所有 API keys |
-| `POST` | `/admin/apikeys` | 创建 API key（自动生成 UUID） |
-| `GET` | `/admin/apikeys/{id}` | 按 ID 获取单个 API key |
-| `PUT` | `/admin/apikeys/{id}` | 创建或更新 API key（upsert） |
-| `DELETE` | `/admin/apikeys/{id}` | 删除 API key |
-
-### 认证方式
-
-Admin API 通过 axum middleware 保护，支持两种方式传递 admin key：
-
-1. `Authorization: Bearer <admin_key>` 头
-2. `x-api-key: <admin_key>` 自定义头
-
-Admin key 在 `config.yaml` 中静态配置：
-
-```yaml
-deployment:
-  admin:
-    admin_key:
-      - key: admin
-      - key: another-secret-key
-```
-
-若未配置 admin key，所有 admin 请求被拒绝（401）。
-
-### 请求/响应格式
-
-所有请求/响应体均为 `application/json`。
-
-**列表响应**（`GET` 集合端点）：
-
-```json
-{
-  "total": 2,
-  "list": [
-    {
-      "key": "/models/<uuid>",
-      "value": { "..." : "..." },
-      "created_index": 1,
-      "modified_index": 3
-    }
-  ]
-}
-```
-
-**单项响应**（`GET`/`POST`/`PUT` 单个端点）：
-
-```json
-{
-  "key": "/models/<uuid>",
-  "value": { "..." : "..." },
-  "created_index": null,
-  "modified_index": null
-}
-```
-
-**删除响应**：
-
-```json
-{
-  "deleted": 1,
-  "key": "/models/<uuid>"
-}
-```
-
-**错误响应**：
-
-```json
-{"error_msg": "descriptive message"}
-```
-
-| HTTP 状态码 | 触发场景 |
-|------------|---------|
-| `400` | 请求体格式错误 / schema 验证失败 / 重复名称 |
-| `401` | admin key 缺失或无效 |
-| `404` | 资源不存在 |
-| `500` | 内部错误 |
-
-`POST` 返回 `201 Created`；`PUT` 返回 `200 OK`（更新）或 `201 Created`（新建）。
-
-### AISIX 适配说明
-
-api7/aisix 的 Admin API 直接操作 etcd（无独立数据库层），与 AISIX 的 etcd 数据模型天然兼容。AISIX Phase 1 复用此 API schema，仅需按第七章 etcd 数据模型调整 entity body 结构（增加 `provider_id`、`policy_id`、`upstream_model` 等字段），并补充 Providers 和 Policies 的 CRUD 端点。
+如果后续需要保留外部参考实现，请将其视为历史设计来源，而不是当前运行时 contract。

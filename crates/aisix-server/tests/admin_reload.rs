@@ -452,7 +452,10 @@ async fn admin_router_serves_ui_and_admin_api() {
         .unwrap();
     assert_eq!(ui_response.status(), StatusCode::OK);
 
-    let api_response = app.oneshot(admin_get_request("/admin/providers")).await.unwrap();
+    let api_response = app
+        .oneshot(admin_get_request("/admin/providers"))
+        .await
+        .unwrap();
     assert_eq!(api_response.status(), StatusCode::OK);
 }
 
@@ -474,7 +477,10 @@ async fn admin_router_does_not_serve_v1_chat() {
     let fixture = LiveEtcdTestApp::start().await;
     let app = fixture.admin_router();
 
-    let response = app.oneshot(chat_request("live-token", "gpt-4o-mini")).await.unwrap();
+    let response = app
+        .oneshot(chat_request("live-token", "gpt-4o-mini"))
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

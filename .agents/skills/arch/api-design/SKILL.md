@@ -46,7 +46,7 @@ related:
 | StreamChunk | SSE/JSON/Binary 流代理、帧边界、fallback、cancel safety | `sections/stream-chunk.md` |
 | Provider Codec | ProviderCodec trait、ProviderOutput、复用策略 | `sections/provider-codec.md` |
 | PostCall | 异步用量记账、费用追踪、UsageEvent | `sections/post-call.md` |
-| Admin API | 路由、认证、写入语义、错误码 | `sections/admin-api.md` |
+| Admin API | 路由、认证、写入语义、错误码、Admin UI 共享端口约束 | `sections/admin-api.md` |
 | 错误格式 | 按入口协议区分的错误 JSON、ErrorKind→HTTP 映射、可重试错误 | `sections/error-format.md` |
 | 健康检查 | /health、/ready 端点 | `sections/health.md` |
 | 多端点复用 | Pipeline 复用度分析（A/B/C/D 组） | `sections/multi-endpoint.md` |

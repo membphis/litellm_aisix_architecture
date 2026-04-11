@@ -3,6 +3,13 @@
 ## 认证
 
 所有 admin 请求需要 `x-admin-key` 头与配置值匹配。缺失或无效 → 401。
+Admin UI 只是 Admin API 的浏览器界面，用户必须手动输入 admin key，且浏览器只能按 session scope 保存。
+
+## 监听约束
+
+- Admin API 与 Admin UI 共用同一个 admin listener / admin 端口（`server.admin_listen`）
+- admin 端口必须与数据面端口（`server.listen`）分离，不能重叠
+- 数据面 listener 不得暴露 `/admin/...` 或 `/ui`
 
 ## 路由（每个集合：providers、models、apikeys、policies）
 

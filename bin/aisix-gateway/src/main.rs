@@ -175,23 +175,18 @@ mod tests {
         let error =
             validate_server_listeners("127.0.0.1:4000", "127.0.0.1:4000", true).unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("admin listener must not reuse the data plane listen address")
-        );
+        assert!(error
+            .to_string()
+            .contains("admin listener must not reuse the data plane listen address"));
     }
 
     #[test]
     fn startup_rejects_admin_listener_reusing_data_plane_port_on_different_host() {
-        let error =
-            validate_server_listeners("0.0.0.0:4000", "127.0.0.1:4000", true).unwrap_err();
+        let error = validate_server_listeners("0.0.0.0:4000", "127.0.0.1:4000", true).unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("admin listener must not reuse the data plane listen address")
-        );
+        assert!(error
+            .to_string()
+            .contains("admin listener must not reuse the data plane listen address"));
     }
 
     #[test]
