@@ -1,5 +1,6 @@
 use aisix_config::startup::load_from_path;
 use anyhow::{anyhow, Context};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use tracing::{error, info};
 
@@ -27,11 +28,25 @@ async fn main() -> anyhow::Result<()> {
         admin_enabled = admin.is_some(),
         "admin initialization complete"
     );
+    validate_server_listeners(
+        &config.server.listen,
+        &config.server.admin_listen,
+        admin.is_some(),
+    )?;
     log_gateway_starting_http_server(&config.server.listen, admin.is_some());
 
-    aisix_server::app::serve(state, &config.server.listen, admin)
-        .await
+    if let Some(admin) = admin {
+        tokio::try_join!(
+            aisix_server::app::serve_data_plane(state.clone(), &config.server.listen),
+            aisix_server::app::serve_admin(state, &config.server.admin_listen, admin)
+        )
+        .map(|_| ())
         .inspect_err(|error| log_startup_failure("http server", error))
+    } else {
+        aisix_server::app::serve_data_plane(state, &config.server.listen)
+            .await
+            .inspect_err(|error| log_startup_failure("http server", error))
+    }
 }
 
 fn log_gateway_start(config_path: &std::path::Path, log_level: &str) {
@@ -48,6 +63,29 @@ fn log_metrics_configuration(metrics_listen: &str) {
 
 fn log_startup_failure(stage: &str, error_message: &dyn std::fmt::Display) {
     error!(stage, error = %error_message, "startup failed");
+}
+
+fn validate_server_listeners(
+    listen: &str,
+    admin_listen: &str,
+    admin_enabled: bool,
+) -> anyhow::Result<()> {
+    if !admin_enabled {
+        return Ok(());
+    }
+
+    let listen: SocketAddr = listen
+        .parse()
+        .with_context(|| format!("invalid listen address: {listen}"))?;
+    let admin_listen: SocketAddr = admin_listen
+        .parse()
+        .with_context(|| format!("invalid admin listen address: {admin_listen}"))?;
+
+    if listen.port() != 0 && listen.port() == admin_listen.port() {
+        anyhow::bail!("admin listener must not reuse the data plane listen address");
+    }
+
+    Ok(())
 }
 
 fn resolve_config_path(cli_path: Option<String>) -> anyhow::Result<PathBuf> {
@@ -92,7 +130,7 @@ mod tests {
 
     use super::{
         log_gateway_start, log_gateway_starting_http_server, log_metrics_configuration,
-        log_startup_failure,
+        log_startup_failure, validate_server_listeners,
     };
 
     #[test]
@@ -130,6 +168,40 @@ mod tests {
         assert!(output.contains("runtime bootstrap"));
         assert!(output.contains("redis unavailable"));
         assert!(output.contains("ERROR"));
+    }
+
+    #[test]
+    fn startup_rejects_overlapping_admin_and_data_plane_ports() {
+        let error =
+            validate_server_listeners("127.0.0.1:4000", "127.0.0.1:4000", true).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin listener must not reuse the data plane listen address")
+        );
+    }
+
+    #[test]
+    fn startup_rejects_admin_listener_reusing_data_plane_port_on_different_host() {
+        let error =
+            validate_server_listeners("0.0.0.0:4000", "127.0.0.1:4000", true).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin listener must not reuse the data plane listen address")
+        );
+    }
+
+    #[test]
+    fn startup_skips_admin_listener_validation_when_admin_is_disabled() {
+        validate_server_listeners("127.0.0.1:4000", "not-an-address", false).unwrap();
+    }
+
+    #[test]
+    fn startup_allows_ephemeral_ports_for_both_listeners() {
+        validate_server_listeners("127.0.0.1:0", "127.0.0.1:0", true).unwrap();
     }
 
     fn capture_logs(run: impl FnOnce()) -> String {

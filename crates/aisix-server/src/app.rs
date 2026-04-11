@@ -88,23 +88,49 @@ pub async fn serve(
     listen: &str,
     admin: Option<admin::AdminState>,
 ) -> anyhow::Result<()> {
+    let admin_enabled = admin.is_some();
+    let router = build_router(ServerState {
+        app: state,
+        providers: ProviderRegistry::default(),
+        admin,
+    });
+
+    serve_router(router, listen, admin_enabled).await
+}
+
+pub async fn serve_data_plane(state: AppState, listen: &str) -> anyhow::Result<()> {
+    let router = build_data_plane_router(ServerState {
+        app: state,
+        providers: ProviderRegistry::default(),
+        admin: None,
+    });
+
+    serve_router(router, listen, false).await
+}
+
+pub async fn serve_admin(
+    state: AppState,
+    listen: &str,
+    admin: admin::AdminState,
+) -> anyhow::Result<()> {
+    let router = build_admin_router(ServerState {
+        app: state,
+        providers: ProviderRegistry::default(),
+        admin: Some(admin),
+    });
+
+    serve_router(router, listen, true).await
+}
+
+async fn serve_router(router: Router, listen: &str, admin_enabled: bool) -> anyhow::Result<()> {
     let address: SocketAddr = listen
         .parse()
         .with_context(|| format!("invalid listen address: {listen}"))?;
-    log_binding_http_listener(address, admin.is_some());
+    log_binding_http_listener(address, admin_enabled);
     let listener = tokio::net::TcpListener::bind(address).await?;
-    log_gateway_listening(address, admin.is_some());
+    log_gateway_listening(address, admin_enabled);
 
-    axum::serve(
-        listener,
-        build_router(ServerState {
-            app: state,
-            providers: ProviderRegistry::default(),
-            admin,
-        }),
-    )
-    .await
-    .map_err(Into::into)
+    axum::serve(listener, router).await.map_err(Into::into)
 }
 
 fn log_binding_http_listener(address: SocketAddr, admin_enabled: bool) {
