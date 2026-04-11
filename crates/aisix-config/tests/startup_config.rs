@@ -10,6 +10,8 @@ fn loads_example_startup_config() {
     let config = load_from_path(&path).expect("example config should load");
 
     assert_eq!(config.server.listen, "0.0.0.0:4000");
+    assert_eq!(config.server.admin_listen, "127.0.0.1:4001");
+    assert_eq!(config.server.metrics_listen, "0.0.0.0:9090");
     assert_eq!(config.etcd.prefix, "/aisix");
     assert_eq!(config.cache.default, CacheDefaultMode::Disabled);
     assert!(config
@@ -29,6 +31,7 @@ fn missing_cache_section_defaults_to_disabled() {
         &path,
         r#"server:
   listen: "0.0.0.0:4000"
+  admin_listen: "127.0.0.1:4001"
   metrics_listen: "0.0.0.0:9090"
   request_body_limit_mb: 8
 etcd:

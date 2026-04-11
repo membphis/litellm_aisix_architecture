@@ -1179,6 +1179,7 @@ fn test_startup_config(
     aisix_config::startup::StartupConfig {
         server: aisix_config::startup::ServerConfig {
             listen: "127.0.0.1:0".to_string(),
+            admin_listen: "127.0.0.1:0".to_string(),
             metrics_listen: "127.0.0.1:0".to_string(),
             request_body_limit_mb: 1,
         },

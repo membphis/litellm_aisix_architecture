@@ -39,6 +39,7 @@ pub enum CacheDefaultMode {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ServerConfig {
     pub listen: String,
+    pub admin_listen: String,
     pub metrics_listen: String,
     pub request_body_limit_mb: u64,
 }

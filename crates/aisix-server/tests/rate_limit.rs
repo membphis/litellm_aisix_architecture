@@ -183,6 +183,7 @@ fn broken_redis_config(etcd: EtcdConfig) -> StartupConfig {
     StartupConfig {
         server: ServerConfig {
             listen: "127.0.0.1:0".to_string(),
+            admin_listen: "127.0.0.1:0".to_string(),
             metrics_listen: "127.0.0.1:0".to_string(),
             request_body_limit_mb: 1,
         },
