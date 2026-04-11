@@ -33,16 +33,33 @@ export AISIX_UPSTREAM_MODEL="deepseek-chat"
 cargo run -p aisix-gateway -- config/aisix-gateway.example.yaml
 ```
 
+The example config uses two HTTP listeners:
+
+- data plane: `server.listen` (`0.0.0.0:4000`)
+- admin plane: `server.admin_listen` (`127.0.0.1:4001`)
+
+The Admin API and Admin UI always share the same admin port.
+That admin port must be different from the data plane port.
+
 Gateway startup now depends on reachable etcd. The gateway loads its initial runtime snapshot from etcd under the configured prefix and fails to start if etcd cannot be reached.
 
 The embedded Admin API writes config into etcd under the configured prefix. Runtime changes are applied asynchronously by the background etcd watcher after the new full snapshot compiles successfully. A successful Admin response means etcd accepted the write; it does not guarantee the new config is already active.
 
 If a write stores invalid config that later fails compilation, the Admin request may still succeed because etcd accepted it, while the runtime keeps serving the previous compiled snapshot.
 
-4. Create a provider through the embedded Admin API:
+4. Open the embedded Admin UI when you want a browser control plane:
+
+```text
+http://127.0.0.1:4001/ui
+```
+
+When prompted, enter the admin key manually.
+The browser stores it only in `sessionStorage` for the current session and discards it when the browser is closed.
+
+5. Create a provider through the embedded Admin API:
 
 ```bash
-curl -fsS -X PUT http://127.0.0.1:4000/admin/providers/openai \
+curl -fsS -X PUT http://127.0.0.1:4001/admin/providers/openai \
   -H 'content-type: application/json' \
   -H 'x-admin-key: change-me-admin-key' \
   -d '{
@@ -53,10 +70,10 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/providers/openai \
   }'
 ```
 
-5. Create a chat model and an embeddings model:
+6. Create a chat model and an embeddings model:
 
 ```bash
-curl -fsS -X PUT http://127.0.0.1:4000/admin/models/gpt-4o-mini \
+curl -fsS -X PUT http://127.0.0.1:4001/admin/models/gpt-4o-mini \
   -H 'content-type: application/json' \
   -H 'x-admin-key: change-me-admin-key' \
   -d '{
@@ -65,7 +82,7 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/models/gpt-4o-mini \
     "upstream_model": "gpt-4o-mini"
   }'
 
-curl -fsS -X PUT http://127.0.0.1:4000/admin/models/text-embedding-3-small \
+curl -fsS -X PUT http://127.0.0.1:4001/admin/models/text-embedding-3-small \
   -H 'content-type: application/json' \
   -H 'x-admin-key: change-me-admin-key' \
   -d '{
@@ -75,10 +92,10 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/models/text-embedding-3-small \
   }'
 ```
 
-6. Create a virtual API key allowed to use both models:
+7. Create a virtual API key allowed to use both models:
 
 ```bash
-curl -fsS -X PUT http://127.0.0.1:4000/admin/apikeys/demo-key \
+curl -fsS -X PUT http://127.0.0.1:4001/admin/apikeys/demo-key \
   -H 'content-type: application/json' \
   -H 'x-admin-key: change-me-admin-key' \
   -d '{
@@ -88,7 +105,7 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/apikeys/demo-key \
   }'
 ```
 
-7. Call chat after the watcher has reloaded the updated snapshot:
+8. Call chat after the watcher has reloaded the updated snapshot:
 
 ```bash
 curl -fsS http://127.0.0.1:4000/v1/chat/completions \
@@ -101,7 +118,7 @@ curl -fsS http://127.0.0.1:4000/v1/chat/completions \
   }'
 ```
 
-8. Call embeddings:
+9. Call embeddings:
 
 ```bash
 curl -fsS http://127.0.0.1:4000/v1/embeddings \

@@ -5,5 +5,6 @@ pub mod health;
 mod pipeline;
 mod protocol;
 pub mod stream_proxy;
+pub mod ui;
 
 pub use app::ServerState;

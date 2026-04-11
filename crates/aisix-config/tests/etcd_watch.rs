@@ -146,6 +146,7 @@ async fn watcher_partial_reload_drops_invalid_current_resources_and_keeps_valid_
         aisix_config::watcher::load_initial_snapshot(&aisix_config::startup::StartupConfig {
             server: aisix_config::startup::ServerConfig {
                 listen: "127.0.0.1:0".to_string(),
+                admin_listen: "127.0.0.1:0".to_string(),
                 metrics_listen: "127.0.0.1:0".to_string(),
                 request_body_limit_mb: 1,
             },
@@ -235,6 +236,7 @@ async fn watcher_recovers_from_compacted_revision_with_full_reload() {
         aisix_config::watcher::load_initial_snapshot(&aisix_config::startup::StartupConfig {
             server: aisix_config::startup::ServerConfig {
                 listen: "127.0.0.1:0".to_string(),
+                admin_listen: "127.0.0.1:0".to_string(),
                 metrics_listen: "127.0.0.1:0".to_string(),
                 request_body_limit_mb: 1,
             },
@@ -324,6 +326,7 @@ async fn watcher_reconnects_after_transient_reload_failure() {
         aisix_config::watcher::load_initial_snapshot(&aisix_config::startup::StartupConfig {
             server: aisix_config::startup::ServerConfig {
                 listen: "127.0.0.1:0".to_string(),
+                admin_listen: "127.0.0.1:0".to_string(),
                 metrics_listen: "127.0.0.1:0".to_string(),
                 request_body_limit_mb: 1,
             },
@@ -425,6 +428,7 @@ async fn watcher_keeps_last_published_snapshot_on_hard_reload_failure_then_recov
         aisix_config::watcher::load_initial_snapshot(&aisix_config::startup::StartupConfig {
             server: aisix_config::startup::ServerConfig {
                 listen: "127.0.0.1:0".to_string(),
+                admin_listen: "127.0.0.1:0".to_string(),
                 metrics_listen: "127.0.0.1:0".to_string(),
                 request_body_limit_mb: 1,
             },

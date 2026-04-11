@@ -11,6 +11,7 @@ async fn bootstrap_fails_when_etcd_is_unreachable() {
     let config = StartupConfig {
         server: ServerConfig {
             listen: "127.0.0.1:0".to_string(),
+            admin_listen: "127.0.0.1:0".to_string(),
             metrics_listen: "127.0.0.1:0".to_string(),
             request_body_limit_mb: 1,
         },
@@ -93,6 +94,7 @@ async fn bootstrap_loads_initial_snapshot_from_etcd() {
     let config = StartupConfig {
         server: ServerConfig {
             listen: "127.0.0.1:0".to_string(),
+            admin_listen: "127.0.0.1:0".to_string(),
             metrics_listen: "127.0.0.1:0".to_string(),
             request_body_limit_mb: 1,
         },
@@ -176,6 +178,7 @@ async fn bootstrap_sets_default_cache_enabled_when_cache_default_is_enabled() {
     let config = StartupConfig {
         server: ServerConfig {
             listen: "127.0.0.1:0".to_string(),
+            admin_listen: "127.0.0.1:0".to_string(),
             metrics_listen: "127.0.0.1:0".to_string(),
             request_body_limit_mb: 1,
         },
@@ -267,6 +270,7 @@ async fn bootstrap_loads_valid_subset_when_etcd_contains_dependency_invalid_reso
     let config = StartupConfig {
         server: ServerConfig {
             listen: "127.0.0.1:0".to_string(),
+            admin_listen: "127.0.0.1:0".to_string(),
             metrics_listen: "127.0.0.1:0".to_string(),
             request_body_limit_mb: 1,
         },
@@ -336,6 +340,7 @@ async fn bootstrap_stops_watcher_when_last_state_is_dropped() {
     let config = StartupConfig {
         server: ServerConfig {
             listen: "127.0.0.1:0".to_string(),
+            admin_listen: "127.0.0.1:0".to_string(),
             metrics_listen: "127.0.0.1:0".to_string(),
             request_body_limit_mb: 1,
         },

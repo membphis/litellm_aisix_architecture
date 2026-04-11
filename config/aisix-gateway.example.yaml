@@ -1,5 +1,6 @@
 server:
   listen: "0.0.0.0:4000"
+  admin_listen: "127.0.0.1:4001"
   metrics_listen: "0.0.0.0:9090"
   request_body_limit_mb: 8
 

@@ -4,6 +4,10 @@
 
 The Admin API manages runtime config stored in etcd under the configured prefix.
 
+The Admin API is served on the dedicated admin listener (`server.admin_listen`).
+The embedded Admin UI at `/ui` uses that same admin port.
+That admin port must not overlap with the data plane listener (`server.listen`).
+
 The runtime snapshot is compiled from the valid subset of resources currently stored under that prefix.
 Resources with invalid dependencies are skipped and treated as absent from the live runtime until they are fixed.
 Other valid resources continue to compile and apply normally.
@@ -18,6 +22,8 @@ This means a successful `PUT` or `DELETE` response confirms the config change wa
 
 This API is machine-facing and supports concurrent writes across related resources.
 For example, a `model` write may arrive before the referenced `provider` write. The Admin API accepts that ordering and leaves final runtime convergence to the watcher.
+
+The browser UI is only a human-facing companion to this API. Operators enter the admin key manually in the UI, and the browser keeps it only in `sessionStorage` for the current session.
 
 ## Resources
 
@@ -102,21 +108,21 @@ This is intentional in the current API contract.
 ### List Providers
 
 ```bash
-curl -fsS http://127.0.0.1:4000/admin/providers \
+curl -fsS http://127.0.0.1:4001/admin/providers \
   -H 'x-admin-key: change-me-admin-key'
 ```
 
 ### Get One Provider
 
 ```bash
-curl -fsS http://127.0.0.1:4000/admin/providers/openai \
+curl -fsS http://127.0.0.1:4001/admin/providers/openai \
   -H 'x-admin-key: change-me-admin-key'
 ```
 
 ### Put One Provider
 
 ```bash
-curl -fsS -X PUT http://127.0.0.1:4000/admin/providers/openai \
+curl -fsS -X PUT http://127.0.0.1:4001/admin/providers/openai \
   -H 'content-type: application/json' \
   -H 'x-admin-key: change-me-admin-key' \
   -d '{
@@ -131,7 +137,7 @@ curl -fsS -X PUT http://127.0.0.1:4000/admin/providers/openai \
 ### Delete One Provider
 
 ```bash
-curl -fsS -X DELETE http://127.0.0.1:4000/admin/providers/openai \
+curl -fsS -X DELETE http://127.0.0.1:4001/admin/providers/openai \
   -H 'x-admin-key: change-me-admin-key'
 ```
 
@@ -140,7 +146,7 @@ curl -fsS -X DELETE http://127.0.0.1:4000/admin/providers/openai \
 This is allowed by design for machine clients that issue related writes concurrently:
 
 ```bash
-curl -fsS -X PUT http://127.0.0.1:4000/admin/models/gpt-4o-mini \
+curl -fsS -X PUT http://127.0.0.1:4001/admin/models/gpt-4o-mini \
   -H 'content-type: application/json' \
   -H 'x-admin-key: change-me-admin-key' \
   -d '{
@@ -159,21 +165,21 @@ Once `openai` is written, a later reload includes `gpt-4o-mini` automatically.
 ### List API Keys
 
 ```bash
-curl -fsS http://127.0.0.1:4000/admin/apikeys \
+curl -fsS http://127.0.0.1:4001/admin/apikeys \
   -H 'x-admin-key: change-me-admin-key'
 ```
 
 ### Get One API Key
 
 ```bash
-curl -fsS http://127.0.0.1:4000/admin/apikeys/demo-key \
+curl -fsS http://127.0.0.1:4001/admin/apikeys/demo-key \
   -H 'x-admin-key: change-me-admin-key'
 ```
 
 ### Delete One API Key
 
 ```bash
-curl -fsS -X DELETE http://127.0.0.1:4000/admin/apikeys/demo-key \
+curl -fsS -X DELETE http://127.0.0.1:4001/admin/apikeys/demo-key \
   -H 'x-admin-key: change-me-admin-key'
 ```
 

@@ -42,9 +42,9 @@ related:
 
 | 分段 | 说明 | 文件 |
 |------|------|------|
-| 架构分离 | 数据面 / 控制面硬分离、角色对比 | `sections/architecture.md` |
+| 架构分离 | 数据面 listener / admin listener 分离、角色对比 | `sections/architecture.md` |
 | 外部依赖 | etcd（必需）、Redis（限流）、启动顺序 | `sections/dependencies.md` |
-| 启动配置 | YAML 配置文件格式 | `sections/config.md` |
+| 启动配置 | YAML 配置文件格式与 admin listener 约束 | `sections/config.md` |
 | 热加载 | etcd watch → 防抖 → 编译 → ArcSwap、安全保障 | `sections/hot-reload.md` |
 | 启动序列 | 7 步启动流程 | `sections/startup.md` |
 | Crate 选型 | 依赖列表、最小化哲学 | `sections/crate-selection.md` |

@@ -352,6 +352,140 @@ async fn admin_delete_missing_resources_return_not_found() {
 }
 
 #[tokio::test]
+async fn admin_ui_entrypoint_serves_html_shell() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app
+        .oneshot(Request::builder().uri("/ui").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("text/html; charset=utf-8")
+    );
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("AISIX Control Plane"));
+    assert!(html.contains("/ui/app.js"));
+}
+
+#[tokio::test]
+async fn admin_ui_script_serves_browser_app() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/ui/app.js")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/javascript; charset=utf-8")
+    );
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let script = String::from_utf8(body.to_vec()).unwrap();
+    assert!(script.contains("AISIX Control Plane"));
+    assert!(script.contains("/admin/providers"));
+}
+
+#[tokio::test]
+async fn admin_namespace_does_not_expose_ui_entrypoint() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/admin/ui")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn data_plane_router_does_not_expose_admin_routes() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.data_plane_router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/admin/providers")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_router_serves_ui_and_admin_api() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.admin_router();
+
+    let ui_response = app
+        .clone()
+        .oneshot(Request::builder().uri("/ui").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(ui_response.status(), StatusCode::OK);
+
+    let api_response = app
+        .oneshot(admin_get_request("/admin/providers"))
+        .await
+        .unwrap();
+    assert_eq!(api_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn data_plane_router_does_not_serve_ui_entrypoint() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.data_plane_router();
+
+    let response = app
+        .oneshot(Request::builder().uri("/ui").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_router_does_not_serve_v1_chat() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.admin_router();
+
+    let response = app
+        .oneshot(chat_request("live-token", "gpt-4o-mini"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn admin_rejects_path_and_body_id_mismatch() {
     let fixture = LiveEtcdTestApp::start().await;
     let app = fixture.router();
@@ -1018,6 +1152,14 @@ impl LiveEtcdTestApp {
         self.router.clone()
     }
 
+    fn data_plane_router(&self) -> axum::Router {
+        aisix_server::app::build_data_plane_router(self._state.clone())
+    }
+
+    fn admin_router(&self) -> axum::Router {
+        aisix_server::app::build_admin_router(self._state.clone())
+    }
+
     fn harness(&self) -> &support::etcd::EtcdHarness {
         &self.harness
     }
@@ -1108,6 +1250,7 @@ fn test_startup_config(
     aisix_config::startup::StartupConfig {
         server: aisix_config::startup::ServerConfig {
             listen: "127.0.0.1:0".to_string(),
+            admin_listen: "127.0.0.1:0".to_string(),
             metrics_listen: "127.0.0.1:0".to_string(),
             request_body_limit_mb: 1,
         },
