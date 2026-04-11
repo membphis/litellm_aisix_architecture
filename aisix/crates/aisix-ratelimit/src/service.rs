@@ -4,7 +4,7 @@ use aisix_storage::{CounterStore, RedisPool};
 use crate::{
     concurrency::{ConcurrencyGuard, ConcurrencyLimiter},
     redis_check::{RedisCheck, RedisCheckResult},
-    shadow::{ShadowLimiter, rate_limited},
+    shadow::{rate_limited, ShadowLimiter},
 };
 
 #[derive(Debug, Clone)]

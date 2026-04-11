@@ -24,8 +24,14 @@ impl UsageRecorder {
 
         let input_key = format!("usage:key:{}:input_tokens", event.key_id);
         let output_key = format!("usage:key:{}:output_tokens", event.key_id);
-        let _ = self.counters.incr_total(&input_key, event.usage.input_tokens).await;
-        let _ = self.counters.incr_total(&output_key, event.usage.output_tokens).await;
+        let _ = self
+            .counters
+            .incr_total(&input_key, event.usage.input_tokens)
+            .await;
+        let _ = self
+            .counters
+            .incr_total(&output_key, event.usage.output_tokens)
+            .await;
     }
 
     pub fn total_for(&self, key: &str) -> u64 {

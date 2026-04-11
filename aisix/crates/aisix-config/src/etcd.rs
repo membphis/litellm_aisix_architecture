@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{loader::EtcdEntry, startup::EtcdConfig};
 
@@ -47,7 +47,10 @@ impl EtcdStore {
             .await
             .context("failed to load config from etcd")?;
 
-        let revision = response.header().map(|header| header.revision()).unwrap_or(0);
+        let revision = response
+            .header()
+            .map(|header| header.revision())
+            .unwrap_or(0);
         let entries = response
             .kvs()
             .iter()
@@ -77,7 +80,10 @@ impl EtcdStore {
 
         Ok(AdminStoreWrite {
             key,
-            revision: response.header().map(|header| header.revision()).unwrap_or(0),
+            revision: response
+                .header()
+                .map(|header| header.revision())
+                .unwrap_or(0),
         })
     }
 
@@ -97,8 +103,8 @@ impl EtcdStore {
             return Ok(None);
         };
 
-        let value =
-            serde_json::from_slice(kv.value()).with_context(|| format!("failed to decode admin config at {key}"))?;
+        let value = serde_json::from_slice(kv.value())
+            .with_context(|| format!("failed to decode admin config at {key}"))?;
         Ok(Some(value))
     }
 
@@ -143,7 +149,10 @@ impl EtcdStore {
 
         Ok(AdminStoreDelete {
             key,
-            revision: response.header().map(|header| header.revision()).unwrap_or(0),
+            revision: response
+                .header()
+                .map(|header| header.revision())
+                .unwrap_or(0),
             existed: response.deleted() > 0,
         })
     }

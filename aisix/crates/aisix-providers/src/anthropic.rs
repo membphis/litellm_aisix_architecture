@@ -151,7 +151,8 @@ fn build_upstream_request(
 }
 
 fn join_text_parts(parts: &[CanonicalContentPart]) -> String {
-    parts.iter()
+    parts
+        .iter()
         .map(|part| match part {
             CanonicalContentPart::Text { text } => text.as_str(),
         })
@@ -176,7 +177,9 @@ fn render_normalized_events(events: &[OpenAiSseEvent]) -> Bytes {
     Bytes::from(rendered)
 }
 
-fn strip_unsafe_body_headers(mut headers: reqwest::header::HeaderMap) -> reqwest::header::HeaderMap {
+fn strip_unsafe_body_headers(
+    mut headers: reqwest::header::HeaderMap,
+) -> reqwest::header::HeaderMap {
     headers.remove(reqwest::header::CONTENT_LENGTH);
     headers.remove(reqwest::header::TRANSFER_ENCODING);
     headers
@@ -199,11 +202,9 @@ fn resolve_secret(secret_ref: &str) -> Result<String, GatewayError> {
 #[cfg(test)]
 mod tests {
     use super::build_upstream_request;
-    use aisix_types::{
-        request::{
-            CanonicalChatRequest, CanonicalContentPart, CanonicalMessage, CanonicalRequest,
-            CanonicalRole, ProtocolFamily,
-        },
+    use aisix_types::request::{
+        CanonicalChatRequest, CanonicalContentPart, CanonicalMessage, CanonicalRequest,
+        CanonicalRole, ProtocolFamily,
     };
 
     fn canonical_request(role: CanonicalRole, text: &str) -> CanonicalRequest {

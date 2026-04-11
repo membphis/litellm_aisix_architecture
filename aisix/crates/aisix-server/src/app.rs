@@ -1,9 +1,12 @@
 use std::net::SocketAddr;
 
-use anyhow::Context;
 use aisix_core::AppState;
 use aisix_providers::ProviderRegistry;
-use axum::{Router, routing::{get, post}};
+use anyhow::Context;
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use tracing::info;
 
 use crate::{admin, handlers, health};
@@ -25,7 +28,10 @@ pub fn build_router(state: ServerState) -> Router {
     let router = Router::new()
         .route("/health", get(health::health))
         .route("/ready", get(health::ready))
-        .route("/v1/chat/completions", post(handlers::chat::chat_completions))
+        .route(
+            "/v1/chat/completions",
+            post(handlers::chat::chat_completions),
+        )
         .route("/v1/messages", post(handlers::anthropic::messages))
         .route("/v1/embeddings", post(handlers::embeddings::embeddings));
 
@@ -66,7 +72,11 @@ pub fn build_router(state: ServerState) -> Router {
     router.with_state(state)
 }
 
-pub async fn serve(state: AppState, listen: &str, admin: Option<admin::AdminState>) -> anyhow::Result<()> {
+pub async fn serve(
+    state: AppState,
+    listen: &str,
+    admin: Option<admin::AdminState>,
+) -> anyhow::Result<()> {
     let address: SocketAddr = listen
         .parse()
         .with_context(|| format!("invalid listen address: {listen}"))?;
@@ -82,8 +92,8 @@ pub async fn serve(state: AppState, listen: &str, admin: Option<admin::AdminStat
             admin,
         }),
     )
-        .await
-        .map_err(Into::into)
+    .await
+    .map_err(Into::into)
 }
 
 fn log_binding_http_listener(address: SocketAddr, admin_enabled: bool) {

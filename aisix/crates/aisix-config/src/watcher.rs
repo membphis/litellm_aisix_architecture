@@ -1,18 +1,18 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use arc_swap::ArcSwap;
 use tokio::task::{AbortHandle, JoinHandle};
 use tracing::{info, warn};
 
 use crate::{
-    SnapshotCompileReport,
     etcd::EtcdStore,
     loader::compile_snapshot_from_entries,
     snapshot::CompiledSnapshot,
     startup::{EtcdConfig, StartupConfig},
+    SnapshotCompileReport,
 };
 
 pub fn initial_snapshot_handle(snapshot: CompiledSnapshot) -> Arc<ArcSwap<CompiledSnapshot>> {
@@ -107,8 +107,10 @@ async fn watch_once(
         match classify_watch_response(&response)? {
             WatchResponseAction::Continue => continue,
             WatchResponseAction::Reload => {
-                if drain_watch_burst(&mut stream).await? == WatchResponseAction::ReloadAndReconnect {
-                    reload_snapshot_and_revision(config, snapshot.clone(), revision.clone()).await?;
+                if drain_watch_burst(&mut stream).await? == WatchResponseAction::ReloadAndReconnect
+                {
+                    reload_snapshot_and_revision(config, snapshot.clone(), revision.clone())
+                        .await?;
                     return Ok(());
                 }
 
@@ -204,7 +206,7 @@ fn log_snapshot_compile_report(
 
 #[cfg(test)]
 mod tests {
-    use super::{WatchResponseAction, classify_watch_response};
+    use super::{classify_watch_response, WatchResponseAction};
 
     fn watch_response(
         canceled: bool,

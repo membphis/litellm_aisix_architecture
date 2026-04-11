@@ -142,32 +142,33 @@ async fn watcher_partial_reload_drops_invalid_current_resources_and_keeps_valid_
         .await
         .expect("apikey fixture should be written");
 
-    let initial = aisix_config::watcher::load_initial_snapshot(&aisix_config::startup::StartupConfig {
-        server: aisix_config::startup::ServerConfig {
-            listen: "127.0.0.1:0".to_string(),
-            metrics_listen: "127.0.0.1:0".to_string(),
-            request_body_limit_mb: 1,
-        },
-        etcd: harness.config(),
-        redis: aisix_config::startup::RedisConfig {
-            url: "redis://127.0.0.1:1".to_string(),
-        },
-        log: aisix_config::startup::LogConfig {
-            level: "info".to_string(),
-        },
-        runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
-        cache: aisix_config::startup::CacheConfig {
-            default: aisix_config::startup::CacheDefaultMode::Disabled,
-        },
-        deployment: aisix_config::startup::DeploymentConfig {
-            admin: aisix_config::startup::AdminConfig {
-                enabled: false,
-                admin_keys: vec![],
+    let initial =
+        aisix_config::watcher::load_initial_snapshot(&aisix_config::startup::StartupConfig {
+            server: aisix_config::startup::ServerConfig {
+                listen: "127.0.0.1:0".to_string(),
+                metrics_listen: "127.0.0.1:0".to_string(),
+                request_body_limit_mb: 1,
             },
-        },
-    })
-    .await
-    .expect("initial snapshot should load");
+            etcd: harness.config(),
+            redis: aisix_config::startup::RedisConfig {
+                url: "redis://127.0.0.1:1".to_string(),
+            },
+            log: aisix_config::startup::LogConfig {
+                level: "info".to_string(),
+            },
+            runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
+            cache: aisix_config::startup::CacheConfig {
+                default: aisix_config::startup::CacheDefaultMode::Disabled,
+            },
+            deployment: aisix_config::startup::DeploymentConfig {
+                admin: aisix_config::startup::AdminConfig {
+                    enabled: false,
+                    admin_keys: vec![],
+                },
+            },
+        })
+        .await
+        .expect("initial snapshot should load");
     let snapshot = initial_snapshot_handle(initial);
     let watcher = spawn_snapshot_watcher(harness.config(), snapshot.clone())
         .await
@@ -319,32 +320,33 @@ async fn watcher_reconnects_after_transient_reload_failure() {
         .await
         .expect("model fixture should be written");
 
-    let initial = aisix_config::watcher::load_initial_snapshot(&aisix_config::startup::StartupConfig {
-        server: aisix_config::startup::ServerConfig {
-            listen: "127.0.0.1:0".to_string(),
-            metrics_listen: "127.0.0.1:0".to_string(),
-            request_body_limit_mb: 1,
-        },
-        etcd: harness.config(),
-        redis: aisix_config::startup::RedisConfig {
-            url: "redis://127.0.0.1:1".to_string(),
-        },
-        log: aisix_config::startup::LogConfig {
-            level: "info".to_string(),
-        },
-        runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
-        cache: aisix_config::startup::CacheConfig {
-            default: aisix_config::startup::CacheDefaultMode::Disabled,
-        },
-        deployment: aisix_config::startup::DeploymentConfig {
-            admin: aisix_config::startup::AdminConfig {
-                enabled: false,
-                admin_keys: vec![],
+    let initial =
+        aisix_config::watcher::load_initial_snapshot(&aisix_config::startup::StartupConfig {
+            server: aisix_config::startup::ServerConfig {
+                listen: "127.0.0.1:0".to_string(),
+                metrics_listen: "127.0.0.1:0".to_string(),
+                request_body_limit_mb: 1,
             },
-        },
-    })
-    .await
-    .expect("initial snapshot should load");
+            etcd: harness.config(),
+            redis: aisix_config::startup::RedisConfig {
+                url: "redis://127.0.0.1:1".to_string(),
+            },
+            log: aisix_config::startup::LogConfig {
+                level: "info".to_string(),
+            },
+            runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
+            cache: aisix_config::startup::CacheConfig {
+                default: aisix_config::startup::CacheDefaultMode::Disabled,
+            },
+            deployment: aisix_config::startup::DeploymentConfig {
+                admin: aisix_config::startup::AdminConfig {
+                    enabled: false,
+                    admin_keys: vec![],
+                },
+            },
+        })
+        .await
+        .expect("initial snapshot should load");
     let snapshot = initial_snapshot_handle(initial);
     let watcher = spawn_snapshot_watcher(harness.config(), snapshot.clone())
         .await
@@ -419,32 +421,33 @@ async fn watcher_keeps_last_published_snapshot_on_hard_reload_failure_then_recov
         .await
         .expect("apikey fixture should be written");
 
-    let initial = aisix_config::watcher::load_initial_snapshot(&aisix_config::startup::StartupConfig {
-        server: aisix_config::startup::ServerConfig {
-            listen: "127.0.0.1:0".to_string(),
-            metrics_listen: "127.0.0.1:0".to_string(),
-            request_body_limit_mb: 1,
-        },
-        etcd: harness.config(),
-        redis: aisix_config::startup::RedisConfig {
-            url: "redis://127.0.0.1:1".to_string(),
-        },
-        log: aisix_config::startup::LogConfig {
-            level: "info".to_string(),
-        },
-        runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
-        cache: aisix_config::startup::CacheConfig {
-            default: aisix_config::startup::CacheDefaultMode::Disabled,
-        },
-        deployment: aisix_config::startup::DeploymentConfig {
-            admin: aisix_config::startup::AdminConfig {
-                enabled: false,
-                admin_keys: vec![],
+    let initial =
+        aisix_config::watcher::load_initial_snapshot(&aisix_config::startup::StartupConfig {
+            server: aisix_config::startup::ServerConfig {
+                listen: "127.0.0.1:0".to_string(),
+                metrics_listen: "127.0.0.1:0".to_string(),
+                request_body_limit_mb: 1,
             },
-        },
-    })
-    .await
-    .expect("initial snapshot should load");
+            etcd: harness.config(),
+            redis: aisix_config::startup::RedisConfig {
+                url: "redis://127.0.0.1:1".to_string(),
+            },
+            log: aisix_config::startup::LogConfig {
+                level: "info".to_string(),
+            },
+            runtime: aisix_config::startup::RuntimeConfig { worker_threads: 1 },
+            cache: aisix_config::startup::CacheConfig {
+                default: aisix_config::startup::CacheDefaultMode::Disabled,
+            },
+            deployment: aisix_config::startup::DeploymentConfig {
+                admin: aisix_config::startup::AdminConfig {
+                    enabled: false,
+                    admin_keys: vec![],
+                },
+            },
+        })
+        .await
+        .expect("initial snapshot should load");
     let snapshot = initial_snapshot_handle(initial);
     let watcher = spawn_snapshot_watcher(harness.config(), snapshot.clone())
         .await

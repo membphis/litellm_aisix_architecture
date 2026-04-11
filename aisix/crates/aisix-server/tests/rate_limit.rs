@@ -1,9 +1,9 @@
 use std::sync::{
-    Arc,
     atomic::{AtomicUsize, Ordering},
+    Arc,
 };
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{oneshot, Notify};
 
 use aisix_config::{
     etcd_model::{ModelConfig, ProviderAuth, ProviderConfig, ProviderKind, RateLimitConfig},
@@ -22,15 +22,21 @@ use axum::{
     http::{Request, StatusCode},
 };
 use http_body_util::BodyExt;
-use hyper::{body::{Bytes, Incoming}, service::service_fn};
+use hyper::{
+    body::{Bytes, Incoming},
+    service::service_fn,
+};
 use hyper_util::rt::TokioIo;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
+use tokio::time::{timeout, Duration};
 use tower::ServiceExt;
-use tokio::time::{Duration, timeout};
 
 mod support {
     pub mod etcd {
-        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../aisix-config/tests/support/etcd.rs"));
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../aisix-config/tests/support/etcd.rs"
+        ));
     }
 }
 
@@ -39,7 +45,10 @@ async fn inline_rpm_limit_triggers_429() {
     let capture = Arc::new(CapturedRequest::default());
     let upstream = spawn_openai_mock(capture.clone()).await;
     with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_with_inline_rpm_limit(&upstream.base_url, 1)));
+        let app = aisix_server::app::build_router(test_state(snapshot_with_inline_rpm_limit(
+            &upstream.base_url,
+            1,
+        )));
 
         let first = app.clone().oneshot(chat_request()).await.unwrap();
         assert_eq!(first.status(), StatusCode::OK);
@@ -51,7 +60,8 @@ async fn inline_rpm_limit_triggers_429() {
         let json: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"]["message"], "request rate limit exceeded");
         assert_eq!(capture.hits(), 1);
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -63,7 +73,9 @@ async fn redis_failure_degrades_to_shadow_limiter() {
         .expect("test etcd should start");
 
     with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let state = aisix_runtime::bootstrap::bootstrap(&broken_redis_config(harness.config())).await.unwrap();
+        let state = aisix_runtime::bootstrap::bootstrap(&broken_redis_config(harness.config()))
+            .await
+            .unwrap();
         let snapshot = snapshot_with_inline_rpm_limit(&upstream.base_url, 1);
         state.snapshot.store(std::sync::Arc::new(snapshot));
         let app = aisix_server::app::build_router(aisix_server::app::ServerState {
@@ -78,7 +90,8 @@ async fn redis_failure_degrades_to_shadow_limiter() {
         let second = app.oneshot(chat_request()).await.unwrap();
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(capture.hits(), 1);
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -114,7 +127,9 @@ async fn key_rpm_still_inherits_provider_concurrency_limit() {
         let second_status = match second_status {
             Ok(Ok(status)) => status,
             Ok(Err(_)) => panic!("second request status channel dropped unexpectedly"),
-            Err(_) => panic!("second request did not fail fast; concurrency fallback was not inherited"),
+            Err(_) => {
+                panic!("second request did not fail fast; concurrency fallback was not inherited")
+            }
         };
 
         assert_eq!(second_status, StatusCode::TOO_MANY_REQUESTS);
@@ -122,7 +137,8 @@ async fn key_rpm_still_inherits_provider_concurrency_limit() {
         first_request.await.unwrap();
         second_request.await.unwrap();
         assert_eq!(capture.hits(), 1);
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -137,9 +153,22 @@ async fn failed_upstream_does_not_record_usage() {
         let response = app.oneshot(chat_request()).await.unwrap();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(capture.hits(), 1);
-        assert_eq!(state.app.usage_recorder.total_for("usage:key:vk_123:input_tokens"), 0);
-        assert_eq!(state.app.usage_recorder.total_for("usage:key:vk_123:output_tokens"), 0);
-    }).await;
+        assert_eq!(
+            state
+                .app
+                .usage_recorder
+                .total_for("usage:key:vk_123:input_tokens"),
+            0
+        );
+        assert_eq!(
+            state
+                .app
+                .usage_recorder
+                .total_for("usage:key:vk_123:output_tokens"),
+            0
+        );
+    })
+    .await;
 }
 
 fn test_state(snapshot: CompiledSnapshot) -> aisix_server::app::ServerState {
@@ -195,7 +224,9 @@ struct EnvVarGuard {
 
 impl EnvVarGuard {
     fn set(name: &str, value: Option<&str>) -> Self {
-        let lock = env_var_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let lock = env_var_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous = std::env::var(name).ok();
         match value {
             Some(value) => std::env::set_var(name, value),

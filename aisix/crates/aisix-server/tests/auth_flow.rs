@@ -1,9 +1,5 @@
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use axum::{
-    body::Body,
-    http::{Request, StatusCode},
-};
 use aisix_config::{
     etcd_model::{ModelConfig, ProviderAuth, ProviderConfig, ProviderKind},
     snapshot::CompiledSnapshot,
@@ -11,11 +7,18 @@ use aisix_config::{
 };
 use aisix_core::AppState;
 use aisix_providers::ProviderRegistry;
-use aisix_types::request::ChatRequest;
 use aisix_types::entities::KeyMeta;
+use aisix_types::request::ChatRequest;
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use chrono::{Duration, Utc};
 use http_body_util::BodyExt;
-use hyper::{body::{Bytes, Incoming}, service::service_fn};
+use hyper::{
+    body::{Bytes, Incoming},
+    service::service_fn,
+};
 use hyper_util::rt::TokioIo;
 use serde_json::json;
 use tower::ServiceExt;
@@ -26,13 +29,23 @@ async fn health_and_ready_are_exposed() {
 
     let health = app
         .clone()
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(health.status(), StatusCode::OK);
 
     let ready = app
-        .oneshot(Request::builder().uri("/ready").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/ready")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(ready.status(), StatusCode::OK);
@@ -43,7 +56,12 @@ async fn ready_returns_503_when_state_is_not_ready() {
     let app = aisix_server::app::build_router(test_state(empty_snapshot(), false));
 
     let ready = app
-        .oneshot(Request::builder().uri("/ready").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/ready")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -55,7 +73,10 @@ async fn invalid_virtual_key_returns_401() {
     let app = app_with_snapshot(auth_snapshot(None, "https://example.invalid"));
 
     let response = app
-        .oneshot(chat_request_with_auth(Some("Bearer invalid-token"), "gpt-4o-mini"))
+        .oneshot(chat_request_with_auth(
+            Some("Bearer invalid-token"),
+            "gpt-4o-mini",
+        ))
         .await
         .unwrap();
 
@@ -79,7 +100,10 @@ async fn malformed_authorization_returns_401() {
     let app = app_with_snapshot(auth_snapshot(None, "https://example.invalid"));
 
     let response = app
-        .oneshot(chat_request_with_auth(Some("Token valid-token"), "gpt-4o-mini"))
+        .oneshot(chat_request_with_auth(
+            Some("Token valid-token"),
+            "gpt-4o-mini",
+        ))
         .await
         .unwrap();
 
@@ -94,7 +118,10 @@ async fn expired_key_returns_401() {
     ));
 
     let response = app
-        .oneshot(chat_request_with_auth(Some("Bearer valid-token"), "gpt-4o-mini"))
+        .oneshot(chat_request_with_auth(
+            Some("Bearer valid-token"),
+            "gpt-4o-mini",
+        ))
         .await
         .unwrap();
 
@@ -106,7 +133,10 @@ async fn exact_expiry_boundary_returns_401() {
     let app = app_with_snapshot(auth_snapshot(Some(Utc::now()), "https://example.invalid"));
 
     let response = app
-        .oneshot(chat_request_with_auth(Some("Bearer valid-token"), "gpt-4o-mini"))
+        .oneshot(chat_request_with_auth(
+            Some("Bearer valid-token"),
+            "gpt-4o-mini",
+        ))
         .await
         .unwrap();
 
@@ -119,9 +149,12 @@ async fn happy_path_auth_and_route_returns_200() {
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
         let app = app_with_snapshot(auth_snapshot(None, &upstream.base_url));
 
-        app.oneshot(chat_request_with_auth(Some("Bearer valid-token"), "gpt-4o-mini"))
-            .await
-            .unwrap()
+        app.oneshot(chat_request_with_auth(
+            Some("Bearer valid-token"),
+            "gpt-4o-mini",
+        ))
+        .await
+        .unwrap()
     })
     .await;
 
@@ -134,9 +167,12 @@ async fn lowercase_bearer_scheme_returns_200() {
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
         let app = app_with_snapshot(auth_snapshot(None, &upstream.base_url));
 
-        app.oneshot(chat_request_with_auth(Some("bearer valid-token"), "gpt-4o-mini"))
-            .await
-            .unwrap()
+        app.oneshot(chat_request_with_auth(
+            Some("bearer valid-token"),
+            "gpt-4o-mini",
+        ))
+        .await
+        .unwrap()
     })
     .await;
 
@@ -148,7 +184,10 @@ async fn disallowed_model_returns_403() {
     let app = app_with_snapshot(auth_snapshot(None, "https://example.invalid"));
 
     let response = app
-        .oneshot(chat_request_with_auth(Some("Bearer valid-token"), "gpt-4.1"))
+        .oneshot(chat_request_with_auth(
+            Some("Bearer valid-token"),
+            "gpt-4.1",
+        ))
         .await
         .unwrap();
 
@@ -335,7 +374,9 @@ fn chat_request_with_auth(authorization: Option<&str>, model: &str) -> Request<B
     }
 
     builder
-        .body(Body::from(serde_json::to_vec(&chat_request(model)).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(&chat_request(model)).unwrap(),
+        ))
         .unwrap()
 }
 

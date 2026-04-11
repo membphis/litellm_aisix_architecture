@@ -25,7 +25,10 @@ async fn gets_json_from_live_etcd() {
         .await
         .expect("test etcd should start");
     harness
-        .put_json("/aisix/providers/openai", &provider("openai", "https://api.openai.com"))
+        .put_json(
+            "/aisix/providers/openai",
+            &provider("openai", "https://api.openai.com"),
+        )
         .await
         .expect("fixture provider should be written");
 
@@ -49,7 +52,10 @@ async fn lists_json_from_live_etcd_collection() {
         .await
         .expect("test etcd should start");
     harness
-        .put_json("/aisix/providers/openai", &provider("openai", "https://api.openai.com"))
+        .put_json(
+            "/aisix/providers/openai",
+            &provider("openai", "https://api.openai.com"),
+        )
         .await
         .expect("openai fixture should be written");
     harness
@@ -83,7 +89,10 @@ async fn list_json_excludes_sibling_prefixes() {
         .await
         .expect("test etcd should start");
     harness
-        .put_json("/aisix/providers/openai", &provider("openai", "https://api.openai.com"))
+        .put_json(
+            "/aisix/providers/openai",
+            &provider("openai", "https://api.openai.com"),
+        )
         .await
         .expect("provider fixture should be written");
     harness
@@ -130,7 +139,10 @@ async fn delete_reports_whether_key_existed() {
         .await
         .expect("test etcd should start");
     harness
-        .put_json("/aisix/providers/openai", &provider("openai", "https://api.openai.com"))
+        .put_json(
+            "/aisix/providers/openai",
+            &provider("openai", "https://api.openai.com"),
+        )
         .await
         .expect("fixture provider should be written");
 

@@ -12,7 +12,10 @@ use axum::{
     http::{Request, StatusCode},
 };
 use http_body_util::BodyExt;
-use hyper::{body::{Bytes, Incoming}, service::service_fn};
+use hyper::{
+    body::{Bytes, Incoming},
+    service::service_fn,
+};
 use hyper_util::rt::TokioIo;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -21,7 +24,8 @@ use tower::ServiceExt;
 async fn anthropic_messages_non_stream_returns_anthropic_message_json() {
     let upstream = spawn_openai_mock().await;
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
+        let app =
+            aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
         app.oneshot(anthropic_non_stream_request()).await.unwrap()
     })
     .await;
@@ -48,20 +52,28 @@ async fn anthropic_messages_non_stream_returns_anthropic_message_json() {
 
 #[tokio::test]
 async fn anthropic_messages_requires_anthropic_version_header() {
-    let app = aisix_server::app::build_router(test_state(snapshot_for_upstream("http://localhost:1")));
-    let response = app.oneshot(anthropic_request_without_version()).await.unwrap();
+    let app =
+        aisix_server::app::build_router(test_state(snapshot_for_upstream("http://localhost:1")));
+    let response = app
+        .oneshot(anthropic_request_without_version())
+        .await
+        .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["error"]["type"], "invalid_request_error");
-    assert!(json["error"]["message"].as_str().unwrap().contains("anthropic-version"));
+    assert!(json["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("anthropic-version"));
 }
 
 #[tokio::test]
 async fn anthropic_messages_rejects_tools_in_phase_one() {
-    let app = aisix_server::app::build_router(test_state(snapshot_for_upstream("http://localhost:1")));
+    let app =
+        aisix_server::app::build_router(test_state(snapshot_for_upstream("http://localhost:1")));
     let response = app.oneshot(anthropic_request_with_tools()).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -76,7 +88,8 @@ async fn anthropic_messages_rejects_tools_in_phase_one() {
 async fn anthropic_messages_accepts_bearer_auth() {
     let upstream = spawn_openai_mock().await;
     let response = with_env_var("OPENAI_API_KEY", Some("test-openai-key"), || async {
-        let app = aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
+        let app =
+            aisix_server::app::build_router(test_state(snapshot_for_upstream(&upstream.base_url)));
         app.oneshot(anthropic_request_with_bearer()).await.unwrap()
     })
     .await;
@@ -86,7 +99,8 @@ async fn anthropic_messages_accepts_bearer_auth() {
 
 #[tokio::test]
 async fn anthropic_messages_rejects_unknown_top_level_fields() {
-    let app = aisix_server::app::build_router(test_state(snapshot_for_upstream("http://localhost:1")));
+    let app =
+        aisix_server::app::build_router(test_state(snapshot_for_upstream("http://localhost:1")));
     let response = app
         .oneshot(anthropic_request(json!({
             "model": "gpt-4o-mini",
@@ -102,7 +116,10 @@ async fn anthropic_messages_rejects_unknown_top_level_fields() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"]["type"], "invalid_request_error");
-    assert!(json["error"]["message"].as_str().unwrap().contains("mcp_servers"));
+    assert!(json["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("mcp_servers"));
 }
 
 fn test_state(snapshot: CompiledSnapshot) -> aisix_server::app::ServerState {

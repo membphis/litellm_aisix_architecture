@@ -46,7 +46,10 @@ impl AdminState {
         }
 
         let etcd = EtcdStore::connect(&config.etcd).await?;
-        log_admin_ready(config.deployment.admin.admin_keys.len(), &config.etcd.prefix);
+        log_admin_ready(
+            config.deployment.admin.admin_keys.len(),
+            &config.etcd.prefix,
+        );
         Ok(Some(Self {
             keys: Arc::new(
                 config

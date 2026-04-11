@@ -368,7 +368,9 @@ async fn bootstrap_stops_watcher_when_last_state_is_dropped() {
 
     harness.pause().expect("etcd should pause after state drop");
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-    harness.unpause().expect("etcd should unpause after state drop");
+    harness
+        .unpause()
+        .expect("etcd should unpause after state drop");
 
     harness
         .put_json(

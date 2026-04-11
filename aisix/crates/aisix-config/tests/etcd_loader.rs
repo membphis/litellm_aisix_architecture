@@ -99,7 +99,10 @@ fn reports_invalid_model_reference_from_etcd_entries() {
     assert_eq!(report.issues.len(), 1);
     assert_eq!(report.issues[0].kind, "model");
     assert_eq!(report.issues[0].id, "gpt-4o-mini");
-    assert_eq!(report.issues[0].reason, "missing provider reference: missing-provider");
+    assert_eq!(
+        report.issues[0].reason,
+        "missing provider reference: missing-provider"
+    );
 }
 
 #[test]
