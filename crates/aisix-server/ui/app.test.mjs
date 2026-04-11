@@ -6,7 +6,9 @@ import {
   buildDeleteImpact,
   buildResourcePayload,
   deriveRelationshipModel,
+  nextAdminUiMode,
   nextAdminRefreshState,
+  nextDetailMode,
   maskApiKey,
 } from './app.mjs';
 
@@ -134,4 +136,22 @@ test('nextAdminRefreshState waits for admin key before loading', () => {
 
 test('admin key persistence stays session-scoped', () => {
   assert.equal(adminKeyStorageMode(), 'session');
+});
+
+test('admin lock state requires successful validation before entering listing mode', () => {
+  assert.deepEqual(nextAdminUiMode({ adminKey: '', adminKeyValid: false, draftMode: null }), {
+    locked: true,
+    mode: 'locked',
+  });
+
+  assert.deepEqual(nextAdminUiMode({ adminKey: 'test-key', adminKeyValid: true, draftMode: null }), {
+    locked: false,
+    mode: 'listing',
+  });
+});
+
+test('editor mode only opens for explicit create or edit actions', () => {
+  assert.equal(nextDetailMode({ draftMode: null, editingId: null }), 'listing');
+  assert.equal(nextDetailMode({ draftMode: 'create', editingId: null }), 'editing');
+  assert.equal(nextDetailMode({ draftMode: 'edit', editingId: 'gpt-4o-mini' }), 'editing');
 });

@@ -1105,3 +1105,18 @@ export function buildDeleteImpact(collection, id, data) {
 if (hasBrowserDom) {
   init();
 }
+export function nextAdminUiMode({ adminKey, adminKeyValid, draftMode }) {
+  if (!adminKey || !adminKey.trim() || !adminKeyValid) {
+    return { locked: true, mode: 'locked' };
+  }
+
+  return {
+    locked: false,
+    mode: draftMode ? 'editing' : 'listing',
+  };
+}
+
+export function nextDetailMode({ draftMode, editingId }) {
+  return draftMode === 'create' || (draftMode === 'edit' && editingId) ? 'editing' : 'listing';
+}
+
