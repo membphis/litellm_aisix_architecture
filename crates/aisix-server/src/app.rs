@@ -25,7 +25,11 @@ impl axum::extract::FromRef<ServerState> for AppState {
 }
 
 pub fn build_router(state: ServerState) -> Router {
-    let router = Router::new()
+    build_data_plane_router(state.clone()).merge(build_admin_router(state))
+}
+
+pub fn build_data_plane_router(state: ServerState) -> Router {
+    Router::new()
         .route("/health", get(health::health))
         .route("/ready", get(health::ready))
         .route(
@@ -33,7 +37,12 @@ pub fn build_router(state: ServerState) -> Router {
             post(handlers::chat::chat_completions),
         )
         .route("/v1/messages", post(handlers::anthropic::messages))
-        .route("/v1/embeddings", post(handlers::embeddings::embeddings));
+        .route("/v1/embeddings", post(handlers::embeddings::embeddings))
+        .with_state(state)
+}
+
+pub fn build_admin_router(state: ServerState) -> Router {
+    let router = Router::new();
 
     let router = if state.admin.is_some() {
         router

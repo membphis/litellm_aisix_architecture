@@ -423,6 +423,40 @@ async fn admin_namespace_does_not_expose_ui_entrypoint() {
 }
 
 #[tokio::test]
+async fn data_plane_router_does_not_expose_admin_routes() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.data_plane_router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/admin/providers")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn admin_router_serves_ui_and_admin_api() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.admin_router();
+
+    let ui_response = app
+        .clone()
+        .oneshot(Request::builder().uri("/ui").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(ui_response.status(), StatusCode::OK);
+
+    let api_response = app.oneshot(admin_get_request("/admin/providers")).await.unwrap();
+    assert_eq!(api_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn admin_rejects_path_and_body_id_mismatch() {
     let fixture = LiveEtcdTestApp::start().await;
     let app = fixture.router();
@@ -1087,6 +1121,14 @@ impl LiveEtcdTestApp {
 
     fn router(&self) -> axum::Router {
         self.router.clone()
+    }
+
+    fn data_plane_router(&self) -> axum::Router {
+        aisix_server::app::build_data_plane_router(self._state.clone())
+    }
+
+    fn admin_router(&self) -> axum::Router {
+        aisix_server::app::build_admin_router(self._state.clone())
     }
 
     fn harness(&self) -> &support::etcd::EtcdHarness {
