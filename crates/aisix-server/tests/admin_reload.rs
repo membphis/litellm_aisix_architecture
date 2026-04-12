@@ -453,10 +453,47 @@ async fn admin_router_serves_ui_and_admin_api() {
     assert_eq!(ui_response.status(), StatusCode::OK);
 
     let api_response = app
+        .clone()
         .oneshot(admin_get_request("/admin/providers"))
         .await
         .unwrap();
     assert_eq!(api_response.status(), StatusCode::OK);
+
+    let openapi_response = app
+        .oneshot(Request::builder().uri("/openapi/admin.json").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(openapi_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn admin_openapi_endpoint_serves_json_spec() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.admin_router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/openapi/admin.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json; charset=utf-8")
+    );
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["openapi"], "3.1.0");
+    assert!(json["paths"]["/admin/providers/{id}"]["put"].is_object());
+    assert!(json["components"]["schemas"]["ProviderConfig"].is_object());
 }
 
 #[tokio::test]
@@ -466,6 +503,24 @@ async fn data_plane_router_does_not_serve_ui_entrypoint() {
 
     let response = app
         .oneshot(Request::builder().uri("/ui").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn data_plane_router_does_not_expose_openapi_spec() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.data_plane_router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/openapi/admin.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -587,6 +642,87 @@ async fn admin_put_persists_provider_in_etcd_and_returns_write_revision() {
         .expect("provider should be persisted");
     assert_eq!(stored["id"], "openai");
     assert_eq!(stored["base_url"], "https://api.openai.com");
+}
+
+#[tokio::test]
+async fn admin_put_rejects_unknown_fields_by_spec() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app
+        .oneshot(admin_put_request(
+            "/admin/providers/openai",
+            json!({
+                "id": "openai",
+                "kind": "openai",
+                "base_url": "https://api.openai.com",
+                "auth": { "secret_ref": "env:OPENAI_API_KEY" },
+                "unexpected": true
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("unexpected"));
+}
+
+#[tokio::test]
+async fn admin_put_rejects_missing_required_fields_by_spec() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app
+        .oneshot(admin_put_request(
+            "/admin/providers/openai",
+            json!({
+                "id": "openai",
+                "kind": "openai",
+                "auth": { "secret_ref": "env:OPENAI_API_KEY" }
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("base_url"));
+}
+
+#[tokio::test]
+async fn admin_put_rejects_invalid_enum_by_spec() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.router();
+
+    let response = app
+        .oneshot(admin_put_request(
+            "/admin/providers/openai",
+            json!({
+                "id": "openai",
+                "kind": "not-a-provider",
+                "base_url": "https://api.openai.com",
+                "auth": { "secret_ref": "env:OPENAI_API_KEY" }
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("kind"));
 }
 
 #[tokio::test]

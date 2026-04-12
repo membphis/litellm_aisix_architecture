@@ -361,6 +361,15 @@ const state = {
   lastRefreshed: null,
   flashRevision: null,
   playground: createInitialPlaygroundState(),
+  adminSpec: null,
+  schemaFields: {},
+};
+
+const ADMIN_PUT_SCHEMA_PATHS = {
+  providers: '/admin/providers/{id}',
+  models: '/admin/models/{id}',
+  apikeys: '/admin/apikeys/{id}',
+  policies: '/admin/policies/{id}',
 };
 
 const appRoot = hasBrowserDom ? document.querySelector('#app') : null;
@@ -777,7 +786,7 @@ export function renderEditorSummary(collection, item) {
 
 function renderFormFields(collection, values, options = {}) {
   const referenceOptions = buildReferenceOptions(collection, state.data);
-  const fields = COLLECTIONS[collection].form.map((field) => {
+  const fields = fieldsForCollection(collection).map((field) => {
     const enriched = field.type === 'reference' ? { ...field, options: referenceOptions[field.name] ?? [] } : field;
     if (options.readonlyId && field.name === 'id') {
       return { ...enriched, readonly: true };
@@ -1039,6 +1048,15 @@ async function refreshAll() {
   }
   render();
   try {
+    if (!state.adminSpec) {
+      state.adminSpec = await fetchAdminSpec();
+      state.schemaFields = Object.fromEntries(
+        Object.keys(COLLECTIONS).map((collection) => [
+          collection,
+          buildSchemaBackedFieldDefinitions(collection, extractAdminPutSchema(state.adminSpec, collection)),
+        ]),
+      );
+    }
     const [providers, models, apikeys, policies] = await Promise.all([
       fetchCollection('providers'),
       fetchCollection('models'),
@@ -1070,6 +1088,20 @@ async function fetchCollection(collection) {
   }
   if (!response.ok) {
     throw new Error(`Failed to load ${collection}: ${await extractError(response)}`);
+  }
+  return response.json();
+}
+
+async function fetchAdminSpec() {
+  const response = await fetch('/openapi/admin.json', {
+    headers: adminHeaders(),
+  });
+  if (response.status === 401) {
+    handleUnauthorized();
+    throw new Error('Invalid admin key. Please try again.');
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to load admin spec: ${await extractError(response)}`);
   }
   return response.json();
 }
@@ -1454,12 +1486,90 @@ export function adminKeyStorageMode() {
   return 'session';
 }
 
-function defaultFormValues(collection) {
+export function defaultFormValues(collection, fields = fieldsForCollection(collection)) {
   const values = {};
-  for (const field of COLLECTIONS[collection].form) {
+  for (const field of fields) {
     values[field.name] = '';
   }
   return values;
+}
+
+export function extractAdminPutSchema(spec, collection) {
+  return spec?.paths?.[ADMIN_PUT_SCHEMA_PATHS[collection]]?.put?.requestBody?.content?.['application/json']?.schema ?? null;
+}
+
+export function buildSchemaBackedFieldDefinitions(collection, schema) {
+  if (!schema?.properties) {
+    return COLLECTIONS[collection].form;
+  }
+
+  const required = new Set(schema.required ?? []);
+  const fields = [];
+
+  function addField(name, label, property, override = {}) {
+    if (!property) {
+      return;
+    }
+    const normalized = unwrapNullableSchema(property);
+    const options = normalized?.enum;
+    fields.push({
+      name,
+      label,
+      type: Array.isArray(options) ? 'select' : override.type ?? 'text',
+      options,
+      required: override.required ?? required.has(override.requiredKey ?? name),
+      source: override.source,
+    });
+  }
+
+  if (collection === 'providers') {
+    addField('id', 'Provider ID', schema.properties.id);
+    addField('kind', 'Kind', schema.properties.kind);
+    addField('base_url', 'Base URL', schema.properties.base_url);
+    const authSchema = unwrapNullableSchema(schema.properties.auth);
+    addField('secret_ref', 'Secret Ref', authSchema?.properties?.secret_ref, {
+      required: (authSchema?.required ?? []).includes('secret_ref'),
+    });
+    addField('policy_id', 'Policy ID', schema.properties.policy_id, { type: 'reference', source: 'policies' });
+    const cacheSchema = unwrapNullableSchema(schema.properties.cache);
+    addField('cache_mode', 'Cache Mode', cacheSchema?.properties?.mode);
+    return fields;
+  }
+
+  if (collection === 'models') {
+    addField('id', 'Model ID', schema.properties.id);
+    addField('provider_id', 'Provider ID', schema.properties.provider_id, { type: 'reference', source: 'providers' });
+    addField('upstream_model', 'Upstream Model', schema.properties.upstream_model);
+    addField('policy_id', 'Policy ID', schema.properties.policy_id, { type: 'reference', source: 'policies' });
+    const cacheSchema = unwrapNullableSchema(schema.properties.cache);
+    addField('cache_mode', 'Cache Mode', cacheSchema?.properties?.mode);
+    return fields;
+  }
+
+  if (collection === 'apikeys') {
+    addField('id', 'Key ID', schema.properties.id);
+    addField('key', 'Plaintext Key', schema.properties.key);
+    fields.push({ name: 'allowed_models', label: 'Allowed Models (comma separated)', type: 'textarea', required: required.has('allowed_models') });
+    addField('policy_id', 'Policy ID', schema.properties.policy_id, { type: 'reference', source: 'policies' });
+    return fields;
+  }
+
+  addField('id', 'Policy ID', schema.properties.id);
+  fields.push({ name: 'rate_limit_rpm', label: 'RPM', type: 'number', required: true });
+  fields.push({ name: 'rate_limit_tpm', label: 'TPM', type: 'number' });
+  fields.push({ name: 'rate_limit_concurrency', label: 'Concurrency', type: 'number' });
+  return fields;
+}
+
+function unwrapNullableSchema(schema) {
+  if (!schema?.anyOf) {
+    return schema;
+  }
+  return schema.anyOf.find((candidate) => candidate.type !== 'null') ?? schema.anyOf[0] ?? schema;
+}
+
+function fieldsForCollection(collection) {
+  return state.schemaFields[collection] ?? COLLECTIONS[collection].form;
 }
 
 function toFormValues(collection, raw) {

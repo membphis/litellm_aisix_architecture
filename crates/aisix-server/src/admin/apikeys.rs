@@ -1,13 +1,17 @@
 use aisix_config::etcd_model::ApiKeyConfig;
-use aisix_types::error::GatewayError;
+use aisix_types::error::{ErrorKind, GatewayError};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
     Json,
 };
+use serde_json::Value;
 
 use crate::{
-    admin::{auth::require_admin, ensure_path_matches_body_id, ensure_valid_resource_id},
+    admin::{
+        auth::require_admin, ensure_path_matches_body_id, ensure_valid_resource_id,
+        validation::validate_admin_put_request,
+    },
     app::ServerState,
 };
 
@@ -15,9 +19,14 @@ pub async fn put_apikey(
     State(state): State<ServerState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(apikey): Json<ApiKeyConfig>,
+    Json(payload): Json<Value>,
 ) -> Result<Json<crate::admin::AdminWriteResult>, GatewayError> {
     let admin = require_admin(&state, &headers)?;
+    validate_admin_put_request("apikeys", &payload)?;
+    let apikey: ApiKeyConfig = serde_json::from_value(payload).map_err(|error| GatewayError {
+        kind: ErrorKind::InvalidRequest,
+        message: error.to_string(),
+    })?;
     ensure_path_matches_body_id(&id, &apikey.id)?;
     let result = admin.put_apikey(&id, apikey).await?;
     Ok(Json(result))
