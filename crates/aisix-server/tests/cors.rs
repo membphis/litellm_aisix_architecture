@@ -18,7 +18,10 @@ async fn data_plane_handles_cors_preflight_for_chat() {
                 .uri("/v1/chat/completions")
                 .header("origin", "http://127.0.0.1:4001")
                 .header("access-control-request-method", "POST")
-                .header("access-control-request-headers", "authorization, content-type")
+                .header(
+                    "access-control-request-headers",
+                    "authorization, content-type",
+                )
                 .body(Body::empty())
                 .unwrap(),
         )
