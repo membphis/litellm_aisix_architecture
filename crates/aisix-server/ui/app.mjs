@@ -253,11 +253,12 @@ export function classifyPlaygroundFailure({ status, error }) {
 export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl = Date.now) {
   const request = buildPlaygroundRequest(input);
   const startedAt = nowImpl();
+  let responseFormat = 'text';
   try {
     const response = await fetchImpl(request.url, request.options);
     const finishedAt = nowImpl();
     const contentType = response.headers?.get?.('content-type') ?? '';
-    const responseFormat = contentType.includes('application/json') ? 'json' : 'text';
+    responseFormat = contentType.includes('application/json') ? 'json' : 'text';
     const responseBody = contentType.includes('application/json') ? await response.json() : await response.text();
 
     if (response.ok) {
@@ -290,7 +291,7 @@ export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl
       durationMs: Math.max(0, nowImpl() - startedAt),
       error: classifyPlaygroundFailure({ error }),
       assistantText: '',
-      responseFormat: 'text',
+      responseFormat,
       responseBody: String(error.message ?? error),
       request,
     };

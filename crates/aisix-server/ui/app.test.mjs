@@ -204,6 +204,7 @@ test('executePlaygroundRequest returns success payload with latency and assistan
   assert.equal(result.status, 200);
   assert.equal(result.assistantText, 'Hello.');
   assert.equal(result.durationMs, 0);
+  assert.equal(result.responseFormat, 'json');
   assert.equal(result.responseBody.id, 'chatcmpl-123');
 });
 
@@ -223,6 +224,10 @@ test('executePlaygroundRequest marks failed json responses as json format', asyn
 
   assert.equal(result.ok, false);
   assert.equal(result.responseFormat, 'json');
+  assert.deepEqual(result.error, {
+    category: 'auth_failed',
+    title: 'Auth failed',
+  });
 });
 
 test('executePlaygroundRequest marks failed text responses as text format', async () => {
@@ -241,6 +246,10 @@ test('executePlaygroundRequest marks failed text responses as text format', asyn
 
   assert.equal(result.ok, false);
   assert.equal(result.responseFormat, 'text');
+  assert.deepEqual(result.error, {
+    category: 'upstream_error',
+    title: 'Upstream error',
+  });
 });
 
 test('executePlaygroundRequest marks network failures as text format', async () => {
@@ -256,6 +265,30 @@ test('executePlaygroundRequest marks network failures as text format', async () 
 
   assert.equal(result.ok, false);
   assert.equal(result.responseFormat, 'text');
+  assert.deepEqual(result.error, {
+    category: 'network_error',
+    title: 'Network error',
+  });
+});
+
+test('executePlaygroundRequest keeps json format when json parsing fails', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: false,
+    status: 401,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => {
+      throw new Error('Unexpected token < in JSON');
+    },
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'json');
 });
 
 test('buildResourcePayload normalizes provider form fields', () => {
