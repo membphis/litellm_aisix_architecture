@@ -90,9 +90,6 @@ const hasSessionStorage = typeof sessionStorage !== 'undefined';
 const ADMIN_KEY_STORAGE_KEY = 'aisix-admin-key';
 const PLAYGROUND_VIEW = 'playground';
 const RESOURCE_VIEW = 'resources';
-const PLAYGROUND_API_KEY_SOURCE_SAVED = 'saved';
-const PLAYGROUND_API_KEY_SOURCE_MANUAL = 'manual';
-
 export function defaultPlaygroundBaseUrl(hostname = '127.0.0.1', protocol = 'http') {
   return `${protocol}://${hostname}:4000`;
 }
@@ -108,10 +105,10 @@ function browserPlaygroundBaseUrl() {
 function createInitialPlaygroundState() {
   return {
     baseUrl: browserPlaygroundBaseUrl(),
-    apiKeySource: PLAYGROUND_API_KEY_SOURCE_SAVED,
-    selectedApiKeyId: '',
-    manualApiKey: '',
-    model: '',
+    apiKeySelection: 'saved:',
+    customApiKey: '',
+    modelSelection: 'saved:',
+    customModel: '',
     systemPrompt: 'You are a concise assistant.',
     userMessage: 'Say hello in one sentence.',
     requestState: 'idle',
@@ -124,17 +121,30 @@ export function nextPlaygroundFormState(current, values) {
   return {
     ...current,
     baseUrl: String(values.base_url ?? current.baseUrl ?? '').trim(),
-    apiKeySource: String(values.api_key_source ?? current.apiKeySource ?? PLAYGROUND_API_KEY_SOURCE_SAVED),
-    selectedApiKeyId: String(values.selected_api_key_id ?? current.selectedApiKeyId ?? ''),
-    manualApiKey: String(values.manual_api_key ?? current.manualApiKey ?? ''),
-    model: String(values.model ?? current.model ?? '').trim(),
+    apiKeySelection: String(values.api_key_selection ?? current.apiKeySelection ?? 'saved:'),
+    customApiKey: String(values.custom_api_key ?? current.customApiKey ?? ''),
+    modelSelection: String(values.model_selection ?? current.modelSelection ?? 'saved:'),
+    customModel: String(values.custom_model ?? current.customModel ?? ''),
     systemPrompt: String(values.system_prompt ?? current.systemPrompt ?? ''),
     userMessage: String(values.user_message ?? current.userMessage ?? '').trim(),
   };
 }
 
-function playgroundSelectedApiKey(data, selectedApiKeyId) {
+function selectedPlaygroundId(selection, prefix) {
+  if (!String(selection ?? '').startsWith(prefix)) {
+    return '';
+  }
+  return String(selection).slice(prefix.length);
+}
+
+function playgroundSelectedApiKey(data, selection) {
+  const selectedApiKeyId = selectedPlaygroundId(selection, 'saved:');
   return data.apikeys.find((item) => item.id === selectedApiKeyId) ?? null;
+}
+
+function playgroundSelectedModel(data, selection) {
+  const selectedModelId = selectedPlaygroundId(selection, 'saved:');
+  return data.models.find((item) => item.id === selectedModelId) ?? null;
 }
 
 function normalizeBaseUrl(baseUrl) {
@@ -167,9 +177,9 @@ export function buildPlaygroundRequest({ baseUrl, apiKey, model, systemPrompt, u
 }
 
 export function derivePlaygroundHints(data, derived, selection) {
-  const modelId = String(selection.model ?? '').trim();
-  const apiKey = selection.apiKeySource === PLAYGROUND_API_KEY_SOURCE_SAVED
-    ? playgroundSelectedApiKey(data, selection.selectedApiKeyId)
+  const modelId = resolvePlaygroundModel(data, selection);
+  const apiKey = selection.apiKeySelection !== 'custom'
+    ? playgroundSelectedApiKey(data, selection.apiKeySelection)
     : null;
   const model = derived.models.byId[modelId] ?? null;
   const allowsModel = apiKey ? apiKey.allowed_models.includes(modelId) : null;
@@ -193,6 +203,20 @@ export function derivePlaygroundHints(data, derived, selection) {
       message: 'Runtime status is unknown until the model exists in admin config.',
     },
   };
+}
+
+export function resolvePlaygroundApiKey(data, selection) {
+  if (selection.apiKeySelection === 'custom') {
+    return String(selection.customApiKey ?? '').trim();
+  }
+  return playgroundSelectedApiKey(data, selection.apiKeySelection)?.key ?? '';
+}
+
+export function resolvePlaygroundModel(data, selection) {
+  if (selection.modelSelection === 'custom') {
+    return String(selection.customModel ?? '').trim();
+  }
+  return playgroundSelectedModel(data, selection.modelSelection)?.id ?? selectedPlaygroundId(selection.modelSelection, 'saved:');
 }
 
 export function extractAssistantText(payload) {
@@ -477,6 +501,8 @@ function renderPlaygroundView(hints) {
   const savedApiKeys = state.data.apikeys;
   const models = state.data.models;
   const result = state.playground.result;
+  const showCustomApiKey = state.playground.apiKeySelection === 'custom';
+  const showCustomModel = state.playground.modelSelection === 'custom';
   return `
     <div class="playground-grid">
       <div class="panel playground-panel">
@@ -493,31 +519,31 @@ function renderPlaygroundView(hints) {
             <small>Defaults to the data plane port 4000.</small>
           </label>
           <label>
-            API Key Source
-            <select name="api_key_source">
-              <option value="saved" ${state.playground.apiKeySource === PLAYGROUND_API_KEY_SOURCE_SAVED ? 'selected' : ''}>Saved key</option>
-              <option value="manual" ${state.playground.apiKeySource === PLAYGROUND_API_KEY_SOURCE_MANUAL ? 'selected' : ''}>Manual</option>
+            API Key
+            <select name="api_key_selection">
+              ${savedApiKeys.map((item) => `<option value="saved:${escapeHtml(item.id)}" ${state.playground.apiKeySelection === `saved:${item.id}` ? 'selected' : ''}>${escapeHtml(item.id)}</option>`).join('')}
+              <option value="custom" ${showCustomApiKey ? 'selected' : ''}>Custom</option>
             </select>
           </label>
-          ${state.playground.apiKeySource === PLAYGROUND_API_KEY_SOURCE_SAVED
+          ${showCustomApiKey
             ? `<label>
-                Saved API Key
-                <select name="selected_api_key_id">
-                  <option value="">Select API key...</option>
-                  ${savedApiKeys.map((item) => `<option value="${escapeHtml(item.id)}" ${state.playground.selectedApiKeyId === item.id ? 'selected' : ''}>${escapeHtml(item.id)}</option>`).join('')}
-                </select>
+                API Key
+                <input name="custom_api_key" type="password" value="${escapeHtml(state.playground.customApiKey)}" placeholder="sk-..." required />
               </label>`
-            : `<label>
-                Manual API Key
-                <input name="manual_api_key" type="password" value="${escapeHtml(state.playground.manualApiKey)}" placeholder="sk-..." required />
-              </label>`}
+            : ''}
           <label>
             Model
-            <input name="model" list="playground-model-options" type="text" value="${escapeHtml(state.playground.model)}" placeholder="gpt-4o-mini" required />
-            <datalist id="playground-model-options">
-              ${models.map((item) => `<option value="${escapeHtml(item.id)}"></option>`).join('')}
-            </datalist>
+            <select name="model_selection">
+              ${models.map((item) => `<option value="saved:${escapeHtml(item.id)}" ${state.playground.modelSelection === `saved:${item.id}` ? 'selected' : ''}>${escapeHtml(item.id)}</option>`).join('')}
+              <option value="custom" ${showCustomModel ? 'selected' : ''}>Custom</option>
+            </select>
           </label>
+          ${showCustomModel
+            ? `<label>
+                Model
+                <input name="custom_model" type="text" value="${escapeHtml(state.playground.customModel)}" placeholder="gpt-4o-mini" required />
+              </label>`
+            : ''}
           <label>
             System Prompt
             <textarea name="system_prompt">${escapeHtml(state.playground.systemPrompt)}</textarea>
@@ -878,15 +904,10 @@ async function submitPlaygroundForm(form) {
   };
   render();
 
-  const selectedApiKey = playgroundSelectedApiKey(state.data, state.playground.selectedApiKeyId);
-  const apiKey = state.playground.apiKeySource === PLAYGROUND_API_KEY_SOURCE_MANUAL
-    ? state.playground.manualApiKey
-    : selectedApiKey?.key ?? '';
-
   const result = await executePlaygroundRequest({
     baseUrl: state.playground.baseUrl,
-    apiKey,
-    model: state.playground.model,
+    apiKey: resolvePlaygroundApiKey(state.data, state.playground),
+    model: resolvePlaygroundModel(state.data, state.playground),
     systemPrompt: state.playground.systemPrompt,
     userMessage: state.playground.userMessage,
   });

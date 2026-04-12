@@ -7,6 +7,8 @@ import {
   classifyPlaygroundFailure,
   executePlaygroundRequest,
   nextPlaygroundFormState,
+  resolvePlaygroundApiKey,
+  resolvePlaygroundModel,
   adminKeyStorageMode,
   buildRowActions,
   buildDeleteImpact,
@@ -37,13 +39,13 @@ test('defaultPlaygroundBaseUrl uses data plane default port', () => {
   assert.equal(defaultPlaygroundBaseUrl('gateway.internal', 'https'), 'https://gateway.internal:4000');
 });
 
-test('nextPlaygroundFormState updates api key source and current form values', () => {
+test('nextPlaygroundFormState updates single-field api key and model selections', () => {
   const next = nextPlaygroundFormState({
     baseUrl: 'http://127.0.0.1:4000',
-    apiKeySource: 'saved',
-    selectedApiKeyId: 'demo',
-    manualApiKey: '',
-    model: 'gpt-4o-mini',
+    apiKeySelection: 'saved:demo',
+    customApiKey: '',
+    modelSelection: 'saved:gpt-4o-mini',
+    customModel: '',
     systemPrompt: 'You are concise.',
     userMessage: 'Say hello.',
     requestState: 'idle',
@@ -51,18 +53,43 @@ test('nextPlaygroundFormState updates api key source and current form values', (
     lastRequestPreview: null,
   }, {
     base_url: 'https://gateway.internal:4000',
-    api_key_source: 'manual',
-    selected_api_key_id: 'demo',
-    manual_api_key: 'sk-manual',
-    model: 'gpt-4.1-mini',
+    api_key_selection: 'custom',
+    custom_api_key: 'sk-manual',
+    model_selection: 'custom',
+    custom_model: 'gpt-4.1-mini',
     system_prompt: 'You are direct.',
     user_message: 'Ping.',
   });
 
   assert.equal(next.baseUrl, 'https://gateway.internal:4000');
-  assert.equal(next.apiKeySource, 'manual');
-  assert.equal(next.manualApiKey, 'sk-manual');
-  assert.equal(next.model, 'gpt-4.1-mini');
+  assert.equal(next.apiKeySelection, 'custom');
+  assert.equal(next.customApiKey, 'sk-manual');
+  assert.equal(next.modelSelection, 'custom');
+  assert.equal(next.customModel, 'gpt-4.1-mini');
+});
+
+test('resolvePlaygroundApiKey and resolvePlaygroundModel prefer saved selections unless custom is chosen', () => {
+  const data = {
+    apikeys: [{ id: 'demo', key: 'sk-demo-secret', allowed_models: ['gpt-4o-mini'] }],
+    models: [{ id: 'gpt-4o-mini' }],
+  };
+
+  assert.equal(resolvePlaygroundApiKey(data, {
+    apiKeySelection: 'saved:demo',
+    customApiKey: 'sk-manual',
+  }), 'sk-demo-secret');
+  assert.equal(resolvePlaygroundApiKey(data, {
+    apiKeySelection: 'custom',
+    customApiKey: 'sk-manual',
+  }), 'sk-manual');
+  assert.equal(resolvePlaygroundModel(data, {
+    modelSelection: 'saved:gpt-4o-mini',
+    customModel: 'gpt-4.1-mini',
+  }), 'gpt-4o-mini');
+  assert.equal(resolvePlaygroundModel(data, {
+    modelSelection: 'custom',
+    customModel: 'gpt-4.1-mini',
+  }), 'gpt-4.1-mini');
 });
 
 test('buildPlaygroundRequest creates non-streaming chat completion request', () => {
@@ -98,9 +125,10 @@ test('derivePlaygroundHints reports model, api key allowlist, and runtime status
   const derived = deriveRelationshipModel(data);
 
   const hints = derivePlaygroundHints(data, derived, {
-    model: 'gpt-4o-mini',
-    apiKeySource: 'saved',
-    selectedApiKeyId: 'demo',
+    modelSelection: 'saved:gpt-4o-mini',
+    customModel: '',
+    apiKeySelection: 'saved:demo',
+    customApiKey: '',
   });
 
   assert.equal(hints.modelExists.ok, true);
