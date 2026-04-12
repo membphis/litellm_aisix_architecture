@@ -426,6 +426,10 @@ function render() {
               `,
             )
             .join('')}
+          <a class="nav-link" href="/openapi/admin.yaml" target="_blank" rel="noreferrer">
+            <span>OpenAPI</span>
+            <span class="count">yaml</span>
+          </a>
         </div>
       </aside>
       <main class="main">

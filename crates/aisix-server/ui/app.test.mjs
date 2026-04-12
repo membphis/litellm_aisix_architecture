@@ -787,6 +787,15 @@ test('workspace layout prevents empty list panel from stretching vertically', ()
   assert.match(html, /\.main\s*\{[\s\S]*align-content:\s*start;/);
 });
 
+test('sidebar includes OpenAPI link that opens yaml in a new window', () => {
+  const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /OpenAPI/);
+  assert.match(source, /\/openapi\/admin\.yaml/);
+  assert.match(source, /target="_blank"/);
+  assert.match(source, /rel="noreferrer"/);
+});
+
 test('playground hints copy states that checks do not block live requests', () => {
   const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
 
