@@ -647,30 +647,137 @@ test('nextOpenApiViewState tracks idle loading success and error states', () => 
     content: '',
     loadState: 'idle',
     error: '',
+    copyState: 'idle',
   });
 
   assert.deepEqual(
-    nextOpenApiViewState({ content: '', loadState: 'idle', error: '' }, { type: 'loading' }),
-    { content: '', loadState: 'loading', error: '' },
+    nextOpenApiViewState({ content: '', loadState: 'idle', error: '', copyState: 'idle' }, { type: 'loading' }),
+    { content: '', loadState: 'loading', error: '', copyState: 'idle' },
   );
 
   assert.deepEqual(
-    nextOpenApiViewState({ content: '', loadState: 'loading', error: '' }, { type: 'success', content: 'openapi: 3.1.0\n' }),
-    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '' },
+    nextOpenApiViewState({ content: '', loadState: 'loading', error: '', copyState: 'idle' }, { type: 'success', content: 'openapi: 3.1.0\n' }),
+    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', copyState: 'idle' },
   );
 
   assert.deepEqual(
     nextOpenApiViewState(
-      { content: '', loadState: 'loading', error: '', revision: 7 },
+      { content: '', loadState: 'loading', error: '', copyState: 'idle', revision: 7 },
       { type: 'success', content: 'openapi: 3.1.0\n' },
     ),
-    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', revision: 7 },
+    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', copyState: 'idle', revision: 7 },
   );
 
   assert.deepEqual(
-    nextOpenApiViewState({ content: '', loadState: 'loading', error: '' }, { type: 'error', error: 'network down' }),
-    { content: '', loadState: 'error', error: 'network down' },
+    nextOpenApiViewState({ content: '', loadState: 'loading', error: '', copyState: 'idle' }, { type: 'error', error: 'network down' }),
+    { content: '', loadState: 'error', error: 'network down', copyState: 'idle' },
   );
+});
+
+test('nextOpenApiViewState tracks copy status independently from load state', () => {
+  assert.deepEqual(
+    nextOpenApiViewState(
+      { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', copyState: 'idle' },
+      { type: 'copy-success' },
+    ),
+    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', copyState: 'copied' },
+  );
+
+  assert.deepEqual(
+    nextOpenApiViewState(
+      { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', copyState: 'copied' },
+      { type: 'copy-reset' },
+    ),
+    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', copyState: 'idle' },
+  );
+});
+
+test('shouldFetchOpenApiOnTabEnter only fetches from idle or empty error states', () => {
+  assert.equal(
+    app.shouldFetchOpenApiOnTabEnter?.({ loadState: 'idle', content: '' }),
+    true,
+  );
+  assert.equal(
+    app.shouldFetchOpenApiOnTabEnter?.({ loadState: 'error', content: '' }),
+    true,
+  );
+  assert.equal(
+    app.shouldFetchOpenApiOnTabEnter?.({ loadState: 'loading', content: '' }),
+    false,
+  );
+  assert.equal(
+    app.shouldFetchOpenApiOnTabEnter?.({ loadState: 'ready', content: 'openapi: 3.1.0\n' }),
+    false,
+  );
+});
+
+test('copyOpenApiToClipboard returns success result for ready yaml content', async () => {
+  const calls = [];
+  const clipboard = {
+    writeText: async (value) => {
+      calls.push(value);
+    },
+  };
+
+  const result = await app.copyOpenApiToClipboard?.(
+    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', copyState: 'idle' },
+    clipboard,
+  );
+
+  assert.deepEqual(calls, ['openapi: 3.1.0\n']);
+  assert.deepEqual(result, {
+    ok: true,
+    nextState: { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', copyState: 'copied' },
+  });
+});
+
+test('copyOpenApiToClipboard skips copy when yaml is unavailable', async () => {
+  const calls = [];
+  const clipboard = {
+    writeText: async (value) => {
+      calls.push(value);
+    },
+  };
+
+  const loadingResult = await app.copyOpenApiToClipboard?.(
+    { content: '', loadState: 'loading', error: '', copyState: 'idle' },
+    clipboard,
+  );
+  const emptyResult = await app.copyOpenApiToClipboard?.(
+    { content: '', loadState: 'ready', error: '', copyState: 'idle' },
+    clipboard,
+  );
+
+  assert.deepEqual(calls, []);
+  assert.deepEqual(loadingResult, {
+    ok: false,
+    skipped: true,
+    reason: 'unavailable',
+  });
+  assert.deepEqual(emptyResult, {
+    ok: false,
+    skipped: true,
+    reason: 'unavailable',
+  });
+});
+
+test('copyOpenApiToClipboard returns failure result when clipboard rejects', async () => {
+  const clipboard = {
+    writeText: async () => {
+      throw new Error('permission denied');
+    },
+  };
+
+  const result = await app.copyOpenApiToClipboard?.(
+    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', copyState: 'idle' },
+    clipboard,
+  );
+
+  assert.deepEqual(result, {
+    ok: false,
+    skipped: false,
+    error: 'permission denied',
+  });
 });
 
 test('fetchOpenApiYaml loads yaml text with admin headers', async () => {
@@ -722,6 +829,7 @@ test('renderOpenApiView shows developer-facing copy and yaml content', () => {
     content: 'openapi: 3.1.0\ninfo:\n  title: AISIX Admin API\n',
     loadState: 'ready',
     error: '',
+    copyState: 'idle',
   });
 
   assert.match(html, /class="openapi-code-block"/);
@@ -733,11 +841,49 @@ test('renderOpenApiView shows developer-facing copy and yaml content', () => {
   assert.match(html, /openapi: 3\.1\.0/);
 });
 
+test('renderOpenApiView renders copy button in the content area and disables it without yaml', () => {
+  const html = renderOpenApiView({
+    content: '',
+    loadState: 'loading',
+    error: '',
+    copyState: 'idle',
+  });
+
+  assert.doesNotMatch(html, /id="refresh-openapi-button"/);
+  assert.match(html, /class="openapi-code-actions"/);
+  assert.match(html, /<button class="secondary-button" type="button" id="copy-openapi-button"[^>]*disabled[^>]*>Copy</);
+});
+
+test('renderOpenApiView enables copy and shows copied label when copy succeeds', () => {
+  const html = renderOpenApiView({
+    content: 'openapi: 3.1.0\n',
+    loadState: 'ready',
+    error: '',
+    copyState: 'copied',
+  });
+
+  assert.match(html, /<button class="secondary-button" type="button" id="copy-openapi-button"(?![^>]*disabled)[^>]*>Copied</);
+  assert.match(html, /<pre>openapi: 3\.1\.0/);
+});
+
+test('renderOpenApiView keeps copy label idle when yaml content is unavailable', () => {
+  const html = renderOpenApiView({
+    content: '',
+    loadState: 'error',
+    error: 'network down',
+    copyState: 'copied',
+  });
+
+  assert.match(html, /<button class="secondary-button" type="button" id="copy-openapi-button"[^>]*disabled[^>]*>Copy</);
+  assert.doesNotMatch(html, />Copied</);
+});
+
 test('renderOpenApiView shows loading and error states', () => {
   const loadingHtml = renderOpenApiView({
     content: '',
     loadState: 'loading',
     error: '',
+    copyState: 'idle',
   });
   assert.match(loadingHtml, /Loading OpenAPI YAML/);
 
@@ -745,6 +891,7 @@ test('renderOpenApiView shows loading and error states', () => {
     content: '',
     loadState: 'error',
     error: 'network down',
+    copyState: 'idle',
   });
   assert.match(errorHtml, /network down/);
 });
@@ -945,14 +1092,18 @@ test('sidebar groups resources and tools and keeps openapi as an in-app nav butt
   assert.doesNotMatch(source, /target="_blank"/);
 });
 
-test('openapi view only auto-refreshes on first entry from idle state', () => {
+test('openapi view click logic delegates fetch retry decisions to shouldFetchOpenApiOnTabEnter', () => {
   const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+  const openApiTabMatch = source.match(/document\.querySelector\(`\[data-view="\$\{OPENAPI_VIEW\}"\]`\)\?\.addEventListener\('click', async \(\) => \{([\s\S]*?)\n  \}\);/);
 
-  assert.match(source, /state\.openapi\.loadState === 'idle'/);
-  assert.doesNotMatch(source, /!state\.openapi\.content/);
+  assert.ok(openApiTabMatch);
+  assert.match(openApiTabMatch[1], /shouldFetchOpenApiOnTabEnter\(state\.openapi\)/);
+  assert.doesNotMatch(openApiTabMatch[1], /state\.openapi\.loadState === 'idle'/);
+  assert.doesNotMatch(openApiTabMatch[1], /state\.openapi\.loadState === 'error'/);
+  assert.doesNotMatch(openApiTabMatch[1], /!state\.openapi\.content/);
 });
 
-test('refreshAll does not trigger openapi yaml refresh while openapi view still does', () => {
+test('refreshAll does not trigger openapi yaml refresh and global events bind copy instead of refresh', () => {
   const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
   const refreshAllMatch = source.match(/async function refreshAll\(\) \{([\s\S]*?)\n\}/);
 
@@ -960,8 +1111,10 @@ test('refreshAll does not trigger openapi yaml refresh while openapi view still 
   assert.match(refreshAllMatch[1], /state\.lastRefreshed = Date\.now\(\);/);
   assert.match(refreshAllMatch[1], /render\(\);/);
   assert.doesNotMatch(refreshAllMatch[1], /refreshOpenApiYaml\(\)/);
-  assert.match(source, /state\.openapi\.loadState === 'idle'[\s\S]*await refreshOpenApiYaml\(\)/);
-  assert.match(source, /#refresh-openapi-button[\s\S]*await refreshOpenApiYaml\(\)/);
+  assert.match(source, /#copy-openapi-button[\s\S]*navigator\.clipboard\.writeText/);
+  assert.match(source, /OPENAPI_COPY_RESET_DELAY_MS = 1500/);
+  assert.match(source, /setTimeout\([\s\S]*OPENAPI_COPY_RESET_DELAY_MS\)/);
+  assert.doesNotMatch(source, /#refresh-openapi-button/);
 });
 
 test('playground hints copy states that checks do not block live requests', () => {
