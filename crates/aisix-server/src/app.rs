@@ -4,9 +4,11 @@ use aisix_core::AppState;
 use aisix_providers::ProviderRegistry;
 use anyhow::Context;
 use axum::{
+    http::{header, Method},
     routing::{get, post},
     Router,
 };
+use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
 use crate::{admin, handlers, health, ui};
@@ -38,7 +40,20 @@ pub fn build_data_plane_router(state: ServerState) -> Router {
         )
         .route("/v1/messages", post(handlers::anthropic::messages))
         .route("/v1/embeddings", post(handlers::embeddings::embeddings))
+        .layer(data_plane_cors_layer())
         .with_state(state)
+}
+
+fn data_plane_cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::HeaderName::from_static("x-api-key"),
+            header::HeaderName::from_static("anthropic-version"),
+        ])
 }
 
 pub fn build_admin_router(state: ServerState) -> Router {
