@@ -498,26 +498,31 @@ function render() {
           <h1>AISIX Control Plane</h1>
         </div>
         <div class="nav" style="margin-top: 18px;">
-          <div class="muted">Resources</div>
-          ${Object.entries(COLLECTIONS)
-            .map(
-              ([key, value]) => `
-                <button class="${state.activeView === RESOURCE_VIEW && key === collection ? 'active' : ''}" data-nav="${key}" type="button">
-                  <span>${value.label}</span>
-                  <span class="count">${derived[key].items.length}</span>
-                </button>
-              `,
-            )
-            .join('')}
-          <div class="muted">Tools</div>
-          <button class="${state.activeView === PLAYGROUND_VIEW ? 'active' : ''}" data-view="${PLAYGROUND_VIEW}" type="button">
-            <span>Playground</span>
-            <span class="count">live</span>
-          </button>
-          <button class="${state.activeView === OPENAPI_VIEW ? 'active' : ''}" data-view="${OPENAPI_VIEW}" type="button">
-            <span>OpenAPI</span>
-            <span class="count">yaml</span>
-          </button>
+          <div class="nav-group">
+            <div class="nav-group-title">Resources</div>
+            ${Object.entries(COLLECTIONS)
+              .map(
+                ([key, value]) => `
+                  <button class="${state.activeView === RESOURCE_VIEW && key === collection ? 'active' : ''}" data-nav="${key}" type="button">
+                    <span>${value.label}</span>
+                    <span class="count">${derived[key].items.length}</span>
+                  </button>
+                `,
+              )
+              .join('')}
+          </div>
+          <div class="nav-divider" aria-hidden="true"></div>
+          <div class="nav-group">
+            <div class="nav-group-title">Tools</div>
+            <button class="${state.activeView === PLAYGROUND_VIEW ? 'active' : ''}" data-view="${PLAYGROUND_VIEW}" type="button">
+              <span>Playground</span>
+              <span class="count">live</span>
+            </button>
+            <button class="${state.activeView === OPENAPI_VIEW ? 'active' : ''}" data-view="${OPENAPI_VIEW}" type="button">
+              <span>OpenAPI</span>
+              <span class="count">yaml</span>
+            </button>
+          </div>
         </div>
       </aside>
       <main class="main">
@@ -721,7 +726,7 @@ export function renderOpenApiView(openapiState) {
   if (nextState.loadState === 'loading') {
     content = '<div class="muted">Loading OpenAPI YAML...</div>';
   } else if (nextState.loadState === 'error') {
-    content = `<div class="badge danger">${escapeHtml(nextState.error || 'OpenAPI load failed.')}</div>`;
+    content = `<div class="badge danger danger-text">${escapeHtml(nextState.error || 'OpenAPI load failed.')}</div>`;
   } else if (nextState.loadState === 'ready') {
     content = `<pre>${escapeHtml(nextState.content)}</pre>`;
   }
@@ -738,7 +743,7 @@ export function renderOpenApiView(openapiState) {
           <a class="secondary-button" href="${OPENAPI_YAML_PATH}">Open Raw YAML</a>
         </div>
       </div>
-      <div class="openapi-content">
+      <div class="openapi-code-block">
         ${content}
       </div>
     </div>

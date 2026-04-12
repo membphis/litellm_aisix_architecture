@@ -724,7 +724,7 @@ test('renderOpenApiView shows developer-facing copy and yaml content', () => {
     error: '',
   });
 
-  assert.match(html, /class="openapi-content"/);
+  assert.match(html, /class="openapi-code-block"/);
   assert.doesNotMatch(html, /playground-output/);
   assert.match(html, /Admin OpenAPI Contract/);
   assert.match(html, /OpenAPI 3\.1 contract/);
@@ -920,13 +920,20 @@ test('workspace layout prevents empty list panel from stretching vertically', ()
   assert.match(html, /\.main\s*\{[\s\S]*align-content:\s*start;/);
 });
 
-test('openapi content keeps baseline content container styling after decoupling', () => {
+test('index styles define grouped nav and openapi viewer layout', () => {
   const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
 
-  assert.match(html, /\.openapi-content\s*\{[\s\S]*border:\s*1px solid var\(--border\);/);
-  assert.match(html, /\.openapi-content\s*\{[\s\S]*padding:\s*14px;/);
-  assert.match(html, /\.openapi-content pre\s*,[\s\S]*white-space:\s*pre-wrap;/);
-  assert.match(html, /\.openapi-content pre\s*,[\s\S]*font-family:\s*ui-monospace/);
+  assert.match(html, /\.nav-group-title\s*\{/);
+  assert.match(html, /\.nav-divider\s*\{/);
+  assert.match(html, /\.openapi-code-block\s*\{/);
+  assert.match(html, /\.openapi-code-block pre\s*\{/);
+});
+
+test('index styles keep openapi viewer scrollable on small screens', () => {
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+
+  assert.match(html, /overflow:\s*auto/);
+  assert.match(html, /@media\s*\(max-width:\s*880px\)/);
 });
 
 test('sidebar groups resources and tools and keeps openapi as an in-app nav button', () => {
