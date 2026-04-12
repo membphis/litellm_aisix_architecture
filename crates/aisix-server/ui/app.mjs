@@ -89,7 +89,84 @@ const hasBrowserDom = typeof document !== 'undefined';
 const hasSessionStorage = typeof sessionStorage !== 'undefined';
 const ADMIN_KEY_STORAGE_KEY = 'aisix-admin-key';
 const PLAYGROUND_VIEW = 'playground';
+const OPENAPI_VIEW = 'openapi';
 const RESOURCE_VIEW = 'resources';
+const OPENAPI_YAML_PATH = '/openapi/admin.yaml';
+const OPENAPI_STATUS_PATH = `GET ${OPENAPI_YAML_PATH}`;
+
+function createInitialOpenApiViewState() {
+  return {
+    content: '',
+    loadState: 'idle',
+    error: '',
+  };
+}
+
+export function viewStatusMeta({ activeView, activeCollection }) {
+  if (activeView === PLAYGROUND_VIEW) {
+    return {
+      title: 'Playground',
+      path: 'POST /v1/chat/completions',
+    };
+  }
+
+  if (activeView === OPENAPI_VIEW) {
+    return {
+      title: 'OpenAPI',
+      path: OPENAPI_STATUS_PATH,
+    };
+  }
+
+  if (activeView === RESOURCE_VIEW) {
+    const resourceConfig = COLLECTIONS[activeCollection] ?? COLLECTIONS.providers;
+    return {
+      title: resourceConfig.label,
+      path: resourceConfig.path,
+    };
+  }
+
+  return {
+    title: 'Unknown view',
+    path: 'Unavailable',
+  };
+}
+
+export function nextOpenApiViewState(
+  current = createInitialOpenApiViewState(),
+  event = null,
+) {
+  if (!event) {
+    return current;
+  }
+
+  if (event.type === 'loading') {
+    return {
+      ...current,
+      loadState: 'loading',
+      error: '',
+    };
+  }
+
+  if (event.type === 'success') {
+    return {
+      ...current,
+      content: String(event.content ?? ''),
+      loadState: 'ready',
+      error: '',
+    };
+  }
+
+  if (event.type === 'error') {
+    return {
+      ...current,
+      loadState: 'error',
+      error: String(event.error ?? ''),
+    };
+  }
+
+  return current;
+}
+
 export function defaultPlaygroundBaseUrl(hostname = '127.0.0.1', protocol = 'http') {
   return `${protocol}://${hostname}:4000`;
 }
@@ -402,8 +479,10 @@ function render() {
     draftMode: state.draftMode,
   });
   const playgroundHints = derivePlaygroundHints(state.data, derived, state.playground);
-  const statusTitle = state.activeView === PLAYGROUND_VIEW ? 'Playground' : resourceConfig.label;
-  const statusPath = state.activeView === PLAYGROUND_VIEW ? 'POST /v1/chat/completions' : resourceConfig.path;
+  const statusMeta = viewStatusMeta({
+    activeView: state.activeView,
+    activeCollection: state.activeCollection,
+  });
 
   appRoot.innerHTML = `
     <div class="layout">
@@ -426,7 +505,7 @@ function render() {
               `,
             )
             .join('')}
-          <a class="nav-link" href="/openapi/admin.yaml" target="_blank" rel="noreferrer">
+          <a class="nav-link" href="${OPENAPI_YAML_PATH}" target="_blank" rel="noreferrer">
             <span>OpenAPI</span>
             <span class="count">yaml</span>
           </a>
@@ -435,8 +514,8 @@ function render() {
       <main class="main">
         <section class="status-bar">
           <div>
-            <strong>${statusTitle}</strong>
-            <div class="muted">Current endpoint: ${statusPath}</div>
+            <strong>${statusMeta.title}</strong>
+            <div class="muted">Current endpoint: ${statusMeta.path}</div>
           </div>
           <div class="status-grid">
             <span class="badge ${badgeClassForConnection()}">${connectionText()}</span>

@@ -8,6 +8,7 @@ import {
   classifyPlaygroundFailure,
   executePlaygroundRequest,
   nextPlaygroundFormState,
+  nextOpenApiViewState,
   resolvePlaygroundApiKey,
   resolvePlaygroundModel,
   adminKeyStorageMode,
@@ -35,6 +36,7 @@ import {
   startCreateAction,
   startEditAction,
   validateAdminKey,
+  viewStatusMeta,
 } from './app.mjs';
 
 test('defaultPlaygroundBaseUrl uses data plane default port', () => {
@@ -614,6 +616,59 @@ test('buildDeleteImpact lists dependent resources before delete', () => {
 test('nextAdminRefreshState waits for admin key before loading', () => {
   assert.deepEqual(nextAdminRefreshState(''), { shouldRefresh: false, connectionState: 'idle' });
   assert.deepEqual(nextAdminRefreshState('test-admin-key'), { shouldRefresh: true, connectionState: 'loading' });
+});
+
+test('status metadata reports resource, playground, and openapi endpoints', () => {
+  assert.deepEqual(viewStatusMeta({ activeView: 'resources', activeCollection: 'providers' }), {
+    title: 'Providers',
+    path: '/admin/providers',
+  });
+
+  assert.deepEqual(viewStatusMeta({ activeView: 'playground', activeCollection: 'providers' }), {
+    title: 'Playground',
+    path: 'POST /v1/chat/completions',
+  });
+
+  assert.deepEqual(viewStatusMeta({ activeView: 'openapi', activeCollection: 'providers' }), {
+    title: 'OpenAPI',
+    path: 'GET /openapi/admin.yaml',
+  });
+
+  assert.deepEqual(viewStatusMeta({ activeView: 'unexpected', activeCollection: 'providers' }), {
+    title: 'Unknown view',
+    path: 'Unavailable',
+  });
+});
+
+test('nextOpenApiViewState tracks idle loading success and error states', () => {
+  assert.deepEqual(nextOpenApiViewState(), {
+    content: '',
+    loadState: 'idle',
+    error: '',
+  });
+
+  assert.deepEqual(
+    nextOpenApiViewState({ content: '', loadState: 'idle', error: '' }, { type: 'loading' }),
+    { content: '', loadState: 'loading', error: '' },
+  );
+
+  assert.deepEqual(
+    nextOpenApiViewState({ content: '', loadState: 'loading', error: '' }, { type: 'success', content: 'openapi: 3.1.0\n' }),
+    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '' },
+  );
+
+  assert.deepEqual(
+    nextOpenApiViewState(
+      { content: '', loadState: 'loading', error: '', revision: 7 },
+      { type: 'success', content: 'openapi: 3.1.0\n' },
+    ),
+    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', revision: 7 },
+  );
+
+  assert.deepEqual(
+    nextOpenApiViewState({ content: '', loadState: 'loading', error: '' }, { type: 'error', error: 'network down' }),
+    { content: '', loadState: 'error', error: 'network down' },
+  );
 });
 
 test('admin key persistence stays session-scoped', () => {
