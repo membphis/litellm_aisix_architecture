@@ -7,7 +7,9 @@ import {
   buildPlaygroundRequest,
   classifyPlaygroundFailure,
   executePlaygroundRequest,
+  fetchOpenApiYaml,
   nextPlaygroundFormState,
+  nextOpenApiViewState,
   resolvePlaygroundApiKey,
   resolvePlaygroundModel,
   adminKeyStorageMode,
@@ -32,9 +34,11 @@ import {
   maskApiKey,
   renderEditorSummary,
   renderField,
+  renderOpenApiView,
   startCreateAction,
   startEditAction,
   validateAdminKey,
+  viewStatusMeta,
 } from './app.mjs';
 
 test('defaultPlaygroundBaseUrl uses data plane default port', () => {
@@ -616,6 +620,135 @@ test('nextAdminRefreshState waits for admin key before loading', () => {
   assert.deepEqual(nextAdminRefreshState('test-admin-key'), { shouldRefresh: true, connectionState: 'loading' });
 });
 
+test('status metadata reports resource, playground, and openapi endpoints', () => {
+  assert.deepEqual(viewStatusMeta({ activeView: 'resources', activeCollection: 'providers' }), {
+    title: 'Providers',
+    path: '/admin/providers',
+  });
+
+  assert.deepEqual(viewStatusMeta({ activeView: 'playground', activeCollection: 'providers' }), {
+    title: 'Playground',
+    path: 'POST /v1/chat/completions',
+  });
+
+  assert.deepEqual(viewStatusMeta({ activeView: 'openapi', activeCollection: 'providers' }), {
+    title: 'OpenAPI',
+    path: 'GET /openapi/admin.yaml',
+  });
+
+  assert.deepEqual(viewStatusMeta({ activeView: 'unexpected', activeCollection: 'providers' }), {
+    title: 'Unknown view',
+    path: 'Unavailable',
+  });
+});
+
+test('nextOpenApiViewState tracks idle loading success and error states', () => {
+  assert.deepEqual(nextOpenApiViewState(), {
+    content: '',
+    loadState: 'idle',
+    error: '',
+  });
+
+  assert.deepEqual(
+    nextOpenApiViewState({ content: '', loadState: 'idle', error: '' }, { type: 'loading' }),
+    { content: '', loadState: 'loading', error: '' },
+  );
+
+  assert.deepEqual(
+    nextOpenApiViewState({ content: '', loadState: 'loading', error: '' }, { type: 'success', content: 'openapi: 3.1.0\n' }),
+    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '' },
+  );
+
+  assert.deepEqual(
+    nextOpenApiViewState(
+      { content: '', loadState: 'loading', error: '', revision: 7 },
+      { type: 'success', content: 'openapi: 3.1.0\n' },
+    ),
+    { content: 'openapi: 3.1.0\n', loadState: 'ready', error: '', revision: 7 },
+  );
+
+  assert.deepEqual(
+    nextOpenApiViewState({ content: '', loadState: 'loading', error: '' }, { type: 'error', error: 'network down' }),
+    { content: '', loadState: 'error', error: 'network down' },
+  );
+});
+
+test('fetchOpenApiYaml loads yaml text with admin headers', async () => {
+  let captured;
+  const fetchImpl = async (url, options) => {
+    captured = { url, options };
+    return {
+      ok: true,
+      status: 200,
+      text: async () => 'openapi: 3.1.0\ninfo:\n  title: AISIX Admin API\n',
+    };
+  };
+
+  const yaml = await fetchOpenApiYaml('change-me-admin-key', fetchImpl);
+
+  assert.equal(captured.url, '/openapi/admin.yaml');
+  assert.equal(captured.options.headers['x-admin-key'], 'change-me-admin-key');
+  assert.match(yaml, /openapi: 3\.1\.0/);
+});
+
+test('fetchOpenApiYaml throws server text on non-401 failure', async () => {
+  await assert.rejects(
+    fetchOpenApiYaml('change-me-admin-key', async () => ({
+      ok: false,
+      status: 503,
+      text: async () => 'gateway unavailable',
+    })),
+    /gateway unavailable/,
+  );
+});
+
+test('fetchOpenApiYaml marks unauthorized failures with a stable code', async () => {
+  await assert.rejects(
+    fetchOpenApiYaml('bad-admin-key', async () => ({
+      ok: false,
+      status: 401,
+      text: async () => 'unauthorized',
+    })),
+    (error) => {
+      assert.equal(error.code, 'unauthorized');
+      assert.match(error.message, /invalid admin key/i);
+      return true;
+    },
+  );
+});
+
+test('renderOpenApiView shows developer-facing copy and yaml content', () => {
+  const html = renderOpenApiView({
+    content: 'openapi: 3.1.0\ninfo:\n  title: AISIX Admin API\n',
+    loadState: 'ready',
+    error: '',
+  });
+
+  assert.match(html, /class="openapi-code-block"/);
+  assert.doesNotMatch(html, /playground-output/);
+  assert.match(html, /Admin OpenAPI Contract/);
+  assert.match(html, /OpenAPI 3\.1 contract/);
+  assert.match(html, /generate clients/i);
+  assert.match(html, /Open Raw YAML/);
+  assert.match(html, /openapi: 3\.1\.0/);
+});
+
+test('renderOpenApiView shows loading and error states', () => {
+  const loadingHtml = renderOpenApiView({
+    content: '',
+    loadState: 'loading',
+    error: '',
+  });
+  assert.match(loadingHtml, /Loading OpenAPI YAML/);
+
+  const errorHtml = renderOpenApiView({
+    content: '',
+    loadState: 'error',
+    error: 'network down',
+  });
+  assert.match(errorHtml, /network down/);
+});
+
 test('admin key persistence stays session-scoped', () => {
   assert.equal(adminKeyStorageMode(), 'session');
 });
@@ -787,13 +920,48 @@ test('workspace layout prevents empty list panel from stretching vertically', ()
   assert.match(html, /\.main\s*\{[\s\S]*align-content:\s*start;/);
 });
 
-test('sidebar includes OpenAPI link that opens yaml in a new window', () => {
+test('index styles define grouped nav and openapi viewer layout', () => {
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+
+  assert.match(html, /\.nav-group-title\s*\{/);
+  assert.match(html, /\.nav-divider\s*\{/);
+  assert.match(html, /\.openapi-code-block\s*\{/);
+  assert.match(html, /\.openapi-code-block pre\s*\{/);
+});
+
+test('index styles keep openapi viewer scrollable on small screens', () => {
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+
+  assert.match(html, /overflow:\s*auto/);
+  assert.match(html, /@media\s*\(max-width:\s*880px\)/);
+});
+
+test('sidebar groups resources and tools and keeps openapi as an in-app nav button', () => {
   const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
 
-  assert.match(source, /OpenAPI/);
-  assert.match(source, /\/openapi\/admin\.yaml/);
-  assert.match(source, /target="_blank"/);
-  assert.match(source, /rel="noreferrer"/);
+  assert.match(source, /Resources/);
+  assert.match(source, /Tools/);
+  assert.match(source, /data-view="\$\{OPENAPI_VIEW\}"/);
+  assert.doesNotMatch(source, /target="_blank"/);
+});
+
+test('openapi view only auto-refreshes on first entry from idle state', () => {
+  const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /state\.openapi\.loadState === 'idle'/);
+  assert.doesNotMatch(source, /!state\.openapi\.content/);
+});
+
+test('refreshAll does not trigger openapi yaml refresh while openapi view still does', () => {
+  const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+  const refreshAllMatch = source.match(/async function refreshAll\(\) \{([\s\S]*?)\n\}/);
+
+  assert.ok(refreshAllMatch);
+  assert.match(refreshAllMatch[1], /state\.lastRefreshed = Date\.now\(\);/);
+  assert.match(refreshAllMatch[1], /render\(\);/);
+  assert.doesNotMatch(refreshAllMatch[1], /refreshOpenApiYaml\(\)/);
+  assert.match(source, /state\.openapi\.loadState === 'idle'[\s\S]*await refreshOpenApiYaml\(\)/);
+  assert.match(source, /#refresh-openapi-button[\s\S]*await refreshOpenApiYaml\(\)/);
 });
 
 test('playground hints copy states that checks do not block live requests', () => {

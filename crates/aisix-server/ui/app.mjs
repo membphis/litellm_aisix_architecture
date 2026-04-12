@@ -89,7 +89,90 @@ const hasBrowserDom = typeof document !== 'undefined';
 const hasSessionStorage = typeof sessionStorage !== 'undefined';
 const ADMIN_KEY_STORAGE_KEY = 'aisix-admin-key';
 const PLAYGROUND_VIEW = 'playground';
+const OPENAPI_VIEW = 'openapi';
 const RESOURCE_VIEW = 'resources';
+const OPENAPI_YAML_PATH = '/openapi/admin.yaml';
+const OPENAPI_STATUS_PATH = `GET ${OPENAPI_YAML_PATH}`;
+
+function createInitialOpenApiViewState() {
+  return {
+    content: '',
+    loadState: 'idle',
+    error: '',
+  };
+}
+
+function unauthorizedError() {
+  const error = new Error('Invalid admin key. Please try again.');
+  error.code = 'unauthorized';
+  return error;
+}
+
+export function viewStatusMeta({ activeView, activeCollection }) {
+  if (activeView === PLAYGROUND_VIEW) {
+    return {
+      title: 'Playground',
+      path: 'POST /v1/chat/completions',
+    };
+  }
+
+  if (activeView === OPENAPI_VIEW) {
+    return {
+      title: 'OpenAPI',
+      path: OPENAPI_STATUS_PATH,
+    };
+  }
+
+  if (activeView === RESOURCE_VIEW) {
+    const resourceConfig = COLLECTIONS[activeCollection] ?? COLLECTIONS.providers;
+    return {
+      title: resourceConfig.label,
+      path: resourceConfig.path,
+    };
+  }
+
+  return {
+    title: 'Unknown view',
+    path: 'Unavailable',
+  };
+}
+
+export function nextOpenApiViewState(
+  current = createInitialOpenApiViewState(),
+  event = null,
+) {
+  if (!event) {
+    return current;
+  }
+
+  if (event.type === 'loading') {
+    return {
+      ...current,
+      loadState: 'loading',
+      error: '',
+    };
+  }
+
+  if (event.type === 'success') {
+    return {
+      ...current,
+      content: String(event.content ?? ''),
+      loadState: 'ready',
+      error: '',
+    };
+  }
+
+  if (event.type === 'error') {
+    return {
+      ...current,
+      loadState: 'error',
+      error: String(event.error ?? ''),
+    };
+  }
+
+  return current;
+}
+
 export function defaultPlaygroundBaseUrl(hostname = '127.0.0.1', protocol = 'http') {
   return `${protocol}://${hostname}:4000`;
 }
@@ -361,6 +444,7 @@ const state = {
   lastRefreshed: null,
   flashRevision: null,
   playground: createInitialPlaygroundState(),
+  openapi: createInitialOpenApiViewState(),
   adminSpec: null,
   schemaFields: {},
 };
@@ -402,8 +486,10 @@ function render() {
     draftMode: state.draftMode,
   });
   const playgroundHints = derivePlaygroundHints(state.data, derived, state.playground);
-  const statusTitle = state.activeView === PLAYGROUND_VIEW ? 'Playground' : resourceConfig.label;
-  const statusPath = state.activeView === PLAYGROUND_VIEW ? 'POST /v1/chat/completions' : resourceConfig.path;
+  const statusMeta = viewStatusMeta({
+    activeView: state.activeView,
+    activeCollection: state.activeCollection,
+  });
 
   appRoot.innerHTML = `
     <div class="layout">
@@ -412,31 +498,38 @@ function render() {
           <h1>AISIX Control Plane</h1>
         </div>
         <div class="nav" style="margin-top: 18px;">
-          <button class="${state.activeView === PLAYGROUND_VIEW ? 'active' : ''}" data-view="${PLAYGROUND_VIEW}" type="button">
-            <span>Playground</span>
-            <span class="count">live</span>
-          </button>
-          ${Object.entries(COLLECTIONS)
-            .map(
-              ([key, value]) => `
-                <button class="${state.activeView === RESOURCE_VIEW && key === collection ? 'active' : ''}" data-nav="${key}" type="button">
-                  <span>${value.label}</span>
-                  <span class="count">${derived[key].items.length}</span>
-                </button>
-              `,
-            )
-            .join('')}
-          <a class="nav-link" href="/openapi/admin.yaml" target="_blank" rel="noreferrer">
-            <span>OpenAPI</span>
-            <span class="count">yaml</span>
-          </a>
+          <div class="nav-group">
+            <div class="nav-group-title">Resources</div>
+            ${Object.entries(COLLECTIONS)
+              .map(
+                ([key, value]) => `
+                  <button class="${state.activeView === RESOURCE_VIEW && key === collection ? 'active' : ''}" data-nav="${key}" type="button">
+                    <span>${value.label}</span>
+                    <span class="count">${derived[key].items.length}</span>
+                  </button>
+                `,
+              )
+              .join('')}
+          </div>
+          <div class="nav-divider" aria-hidden="true"></div>
+          <div class="nav-group">
+            <div class="nav-group-title">Tools</div>
+            <button class="${state.activeView === PLAYGROUND_VIEW ? 'active' : ''}" data-view="${PLAYGROUND_VIEW}" type="button">
+              <span>Playground</span>
+              <span class="count">live</span>
+            </button>
+            <button class="${state.activeView === OPENAPI_VIEW ? 'active' : ''}" data-view="${OPENAPI_VIEW}" type="button">
+              <span>OpenAPI</span>
+              <span class="count">yaml</span>
+            </button>
+          </div>
         </div>
       </aside>
       <main class="main">
         <section class="status-bar">
           <div>
-            <strong>${statusTitle}</strong>
-            <div class="muted">Current endpoint: ${statusPath}</div>
+            <strong>${statusMeta.title}</strong>
+            <div class="muted">Current endpoint: ${statusMeta.path}</div>
           </div>
           <div class="status-grid">
             <span class="badge ${badgeClassForConnection()}">${connectionText()}</span>
@@ -448,6 +541,8 @@ function render() {
         <section class="workspace">
           ${state.activeView === PLAYGROUND_VIEW
             ? renderPlaygroundView(playgroundHints)
+            : state.activeView === OPENAPI_VIEW
+              ? renderOpenApiView(state.openapi)
             : uiMode.mode === 'editing'
               ? renderEditorView(editorCollection, editorValues, editorItem)
               : renderListView(collection, items)}
@@ -619,6 +714,37 @@ function renderPlaygroundView(hints) {
           </div>
           ${renderPlaygroundResult(result)}
         </div>
+      </div>
+    </div>
+  `;
+}
+
+export function renderOpenApiView(openapiState) {
+  const nextState = openapiState ?? createInitialOpenApiViewState();
+  let content = '<div class="muted">OpenAPI YAML has not been loaded yet.</div>';
+
+  if (nextState.loadState === 'loading') {
+    content = '<div class="muted">Loading OpenAPI YAML...</div>';
+  } else if (nextState.loadState === 'error') {
+    content = `<div class="badge danger danger-text">${escapeHtml(nextState.error || 'OpenAPI load failed.')}</div>`;
+  } else if (nextState.loadState === 'ready') {
+    content = `<pre>${escapeHtml(nextState.content)}</pre>`;
+  }
+
+  return `
+    <div class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Admin OpenAPI Contract</h2>
+          <div class="muted">OpenAPI 3.1 contract for debugging admin endpoints, validating request shapes, generate clients, and wiring API tools.</div>
+        </div>
+        <div class="detail-actions">
+          <button class="secondary-button" type="button" id="refresh-openapi-button">Refresh</button>
+          <a class="secondary-button" href="${OPENAPI_YAML_PATH}">Open Raw YAML</a>
+        </div>
+      </div>
+      <div class="openapi-code-block">
+        ${content}
       </div>
     </div>
   `;
@@ -889,6 +1015,15 @@ function bindGlobalEvents() {
     render();
   });
 
+  document.querySelector(`[data-view="${OPENAPI_VIEW}"]`)?.addEventListener('click', async () => {
+    state.activeView = OPENAPI_VIEW;
+    Object.assign(state, finishEditorFlow());
+    render();
+    if (state.openapi.loadState === 'idle') {
+      await refreshOpenApiYaml();
+    }
+  });
+
   document.querySelectorAll('[data-nav]').forEach((button) => {
     button.addEventListener('click', () => {
       state.activeView = RESOURCE_VIEW;
@@ -916,6 +1051,10 @@ function bindGlobalEvents() {
 
   document.querySelector('#refresh-button')?.addEventListener('click', () => {
     void refreshAll();
+  });
+
+  document.querySelector('#refresh-openapi-button')?.addEventListener('click', async () => {
+    await refreshOpenApiYaml();
   });
 
   document.querySelector('#create-button')?.addEventListener('click', () => {
@@ -1078,6 +1217,43 @@ async function refreshAll() {
     }
     state.connectionState = 'error';
     showToast('Connection error', error.message, 'danger');
+    render();
+  }
+}
+
+export async function fetchOpenApiYaml(adminKey, fetchImpl = fetch) {
+  const response = await fetchImpl(OPENAPI_YAML_PATH, {
+    headers: { 'x-admin-key': String(adminKey ?? '').trim() },
+  });
+
+  if (response.status === 401) {
+    throw unauthorizedError();
+  }
+
+  const yaml = await response.text();
+  if (!response.ok) {
+    throw new Error(yaml);
+  }
+
+  return yaml;
+}
+
+async function refreshOpenApiYaml() {
+  state.openapi = nextOpenApiViewState(state.openapi, { type: 'loading' });
+  render();
+
+  try {
+    const content = await fetchOpenApiYaml(state.adminKey);
+    state.openapi = nextOpenApiViewState(state.openapi, { type: 'success', content });
+    render();
+  } catch (error) {
+    const message = String(error.message ?? error);
+    state.openapi = nextOpenApiViewState(state.openapi, { type: 'error', error: message });
+    if (error.code === 'unauthorized') {
+      handleUnauthorized();
+      return;
+    }
+    showToast('OpenAPI load failed', message, 'danger');
     render();
   }
 }
