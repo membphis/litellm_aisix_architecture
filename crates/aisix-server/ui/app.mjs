@@ -257,6 +257,7 @@ export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl
     const response = await fetchImpl(request.url, request.options);
     const finishedAt = nowImpl();
     const contentType = response.headers?.get?.('content-type') ?? '';
+    const responseFormat = contentType.includes('application/json') ? 'json' : 'text';
     const responseBody = contentType.includes('application/json') ? await response.json() : await response.text();
 
     if (response.ok) {
@@ -265,6 +266,7 @@ export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl
         status: response.status,
         durationMs: Math.max(0, finishedAt - startedAt),
         assistantText: extractAssistantText(responseBody),
+        responseFormat,
         responseBody,
         request,
       };
@@ -277,6 +279,7 @@ export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl
       durationMs: Math.max(0, finishedAt - startedAt),
       error: failure,
       assistantText: '',
+      responseFormat,
       responseBody,
       request,
     };
@@ -287,6 +290,7 @@ export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl
       durationMs: Math.max(0, nowImpl() - startedAt),
       error: classifyPlaygroundFailure({ error }),
       assistantText: '',
+      responseFormat: 'text',
       responseBody: String(error.message ?? error),
       request,
     };

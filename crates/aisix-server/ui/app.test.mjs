@@ -207,6 +207,57 @@ test('executePlaygroundRequest returns success payload with latency and assistan
   assert.equal(result.responseBody.id, 'chatcmpl-123');
 });
 
+test('executePlaygroundRequest marks failed json responses as json format', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: false,
+    status: 401,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => ({ error: { message: 'bad key' } }),
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'json');
+});
+
+test('executePlaygroundRequest marks failed text responses as text format', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: false,
+    status: 503,
+    headers: new Headers({ 'content-type': 'text/plain' }),
+    text: async () => 'upstream unavailable',
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'text');
+});
+
+test('executePlaygroundRequest marks network failures as text format', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => {
+    throw new Error('network down');
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'text');
+});
+
 test('buildResourcePayload normalizes provider form fields', () => {
   const payload = buildResourcePayload('providers', {
     id: 'openai',
