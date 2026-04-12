@@ -56,13 +56,14 @@ http://127.0.0.1:4001/ui
 When prompted, enter the admin key manually.
 The browser stores it only in `sessionStorage` for the current session and discards it when the browser is closed.
 
-The admin listener also exposes the control-plane OpenAPI contract at:
+The admin listener exposes the control-plane OpenAPI 3.1 contract at:
 
 ```text
-http://127.0.0.1:4001/openapi/admin.json
+http://127.0.0.1:4001/openapi/admin.yaml
 ```
 
-The embedded UI consumes that same OpenAPI document as its Admin resource schema source.
+The JSON form is also available at `http://127.0.0.1:4001/openapi/admin.json`.
+The embedded UI consumes that same OpenAPI contract as its Admin resource schema source.
 
 5. Create a provider through the embedded Admin API:
 

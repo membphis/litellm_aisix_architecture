@@ -25,8 +25,9 @@ For example, a `model` write may arrive before the referenced `provider` write. 
 
 The browser UI is only a human-facing companion to this API. Operators enter the admin key manually in the UI, and the browser keeps it only in `sessionStorage` for the current session.
 
-The Admin listener also exposes a machine-readable OpenAPI document at `/openapi/admin.json`.
-The embedded UI uses that same document as its schema source for Admin resource forms.
+The Admin listener exposes the machine-readable OpenAPI 3.1 contract at `/openapi/admin.yaml`.
+It also keeps `/openapi/admin.json` available for JSON consumers such as the embedded UI.
+The embedded UI uses that same contract as its schema source for Admin resource forms.
 
 ## Resources
 
@@ -123,6 +124,12 @@ curl -fsS http://127.0.0.1:4001/admin/providers \
 ```
 
 ### Fetch The OpenAPI Document
+
+```bash
+curl -fsS http://127.0.0.1:4001/openapi/admin.yaml
+```
+
+### Fetch The OpenAPI Document As JSON
 
 ```bash
 curl -fsS http://127.0.0.1:4001/openapi/admin.json

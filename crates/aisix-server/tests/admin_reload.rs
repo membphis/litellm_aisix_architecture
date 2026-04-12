@@ -477,6 +477,7 @@ async fn admin_openapi_endpoint_serves_json_spec() {
     let app = fixture.admin_router();
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/openapi/admin.json")
@@ -502,6 +503,36 @@ async fn admin_openapi_endpoint_serves_json_spec() {
 }
 
 #[tokio::test]
+async fn admin_openapi_yaml_endpoint_serves_yaml_spec() {
+    let fixture = LiveEtcdTestApp::start().await;
+    let app = fixture.admin_router();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/openapi/admin.yaml")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/yaml; charset=utf-8")
+    );
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let yaml = String::from_utf8(body.to_vec()).unwrap();
+    assert!(yaml.contains("openapi: 3.1.0"));
+    assert!(yaml.contains("/admin/providers/{id}:"));
+    assert!(yaml.contains("ProviderConfig:"));
+}
+
+#[tokio::test]
 async fn data_plane_router_does_not_serve_ui_entrypoint() {
     let fixture = LiveEtcdTestApp::start().await;
     let app = fixture.data_plane_router();
@@ -520,6 +551,7 @@ async fn data_plane_router_does_not_expose_openapi_spec() {
     let app = fixture.data_plane_router();
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/openapi/admin.json")
@@ -530,6 +562,18 @@ async fn data_plane_router_does_not_expose_openapi_spec() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let yaml_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/openapi/admin.yaml")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(yaml_response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

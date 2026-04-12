@@ -90,6 +90,7 @@ pub fn build_admin_router(state: ServerState) -> Router {
                     .delete(admin::policies::delete_policy),
             )
             .route("/openapi/admin.json", get(ui::admin_openapi_json_response))
+            .route("/openapi/admin.yaml", get(ui::admin_openapi_yaml_response))
             .route("/ui", get(ui::admin_ui_index))
             .route("/ui/app.js", get(ui::admin_ui_app_js))
     } else {
