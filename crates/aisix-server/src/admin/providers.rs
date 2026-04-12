@@ -23,10 +23,11 @@ pub async fn put_provider(
 ) -> Result<Json<crate::admin::AdminWriteResult>, GatewayError> {
     let admin = require_admin(&state, &headers)?;
     validate_admin_put_request("providers", &payload)?;
-    let provider: ProviderConfig = serde_json::from_value(payload).map_err(|error| GatewayError {
-        kind: ErrorKind::InvalidRequest,
-        message: error.to_string(),
-    })?;
+    let provider: ProviderConfig =
+        serde_json::from_value(payload).map_err(|error| GatewayError {
+            kind: ErrorKind::InvalidRequest,
+            message: error.to_string(),
+        })?;
     ensure_path_matches_body_id(&id, &provider.id)?;
     let result = admin.put_provider(&id, provider).await?;
     Ok(Json(result))

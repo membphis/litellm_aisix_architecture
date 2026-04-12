@@ -460,7 +460,12 @@ async fn admin_router_serves_ui_and_admin_api() {
     assert_eq!(api_response.status(), StatusCode::OK);
 
     let openapi_response = app
-        .oneshot(Request::builder().uri("/openapi/admin.json").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/openapi/admin.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(openapi_response.status(), StatusCode::OK);
@@ -719,10 +724,7 @@ async fn admin_put_rejects_invalid_enum_by_spec() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert!(json["error"]["message"]
-        .as_str()
-        .unwrap()
-        .contains("kind"));
+    assert!(json["error"]["message"].as_str().unwrap().contains("kind"));
 }
 
 #[tokio::test]
