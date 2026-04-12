@@ -3,13 +3,22 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import {
+  buildPlaygroundRequest,
+  classifyPlaygroundFailure,
+  executePlaygroundRequest,
+  nextPlaygroundFormState,
+  resolvePlaygroundApiKey,
+  resolvePlaygroundModel,
   adminKeyStorageMode,
   buildRowActions,
   buildDeleteImpact,
   buildJsonAdminHeaders,
+  defaultPlaygroundBaseUrl,
+  derivePlaygroundHints,
   buildReferenceOptions,
   buildResourcePayload,
   deriveRelationshipModel,
+  extractAssistantText,
   finishEditorFlow,
   nextAdminUiMode,
   nextAdminRefreshState,
@@ -23,6 +32,180 @@ import {
   startEditAction,
   validateAdminKey,
 } from './app.mjs';
+
+test('defaultPlaygroundBaseUrl uses data plane default port', () => {
+  assert.equal(defaultPlaygroundBaseUrl(), 'http://127.0.0.1:4000');
+  assert.equal(defaultPlaygroundBaseUrl('gateway.internal'), 'http://gateway.internal:4000');
+  assert.equal(defaultPlaygroundBaseUrl('gateway.internal', 'https'), 'https://gateway.internal:4000');
+});
+
+test('nextPlaygroundFormState updates single-field api key and model selections', () => {
+  const next = nextPlaygroundFormState({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKeySelection: 'saved:demo',
+    customApiKey: '',
+    modelSelection: 'saved:gpt-4o-mini',
+    customModel: '',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+    requestState: 'idle',
+    result: null,
+    lastRequestPreview: null,
+  }, {
+    base_url: 'https://gateway.internal:4000',
+    api_key_selection: 'custom',
+    custom_api_key: 'sk-manual',
+    model_selection: 'custom',
+    custom_model: 'gpt-4.1-mini',
+    system_prompt: 'You are direct.',
+    user_message: 'Ping.',
+  });
+
+  assert.equal(next.baseUrl, 'https://gateway.internal:4000');
+  assert.equal(next.apiKeySelection, 'custom');
+  assert.equal(next.customApiKey, 'sk-manual');
+  assert.equal(next.modelSelection, 'custom');
+  assert.equal(next.customModel, 'gpt-4.1-mini');
+});
+
+test('resolvePlaygroundApiKey and resolvePlaygroundModel prefer saved selections unless custom is chosen', () => {
+  const data = {
+    apikeys: [{ id: 'demo', key: 'sk-demo-secret', allowed_models: ['gpt-4o-mini'] }],
+    models: [{ id: 'gpt-4o-mini' }],
+  };
+
+  assert.equal(resolvePlaygroundApiKey(data, {
+    apiKeySelection: 'saved:demo',
+    customApiKey: 'sk-manual',
+  }), 'sk-demo-secret');
+  assert.equal(resolvePlaygroundApiKey(data, {
+    apiKeySelection: 'custom',
+    customApiKey: 'sk-manual',
+  }), 'sk-manual');
+  assert.equal(resolvePlaygroundModel(data, {
+    modelSelection: 'saved:gpt-4o-mini',
+    customModel: 'gpt-4.1-mini',
+  }), 'gpt-4o-mini');
+  assert.equal(resolvePlaygroundModel(data, {
+    modelSelection: 'custom',
+    customModel: 'gpt-4.1-mini',
+  }), 'gpt-4.1-mini');
+});
+
+test('resolvePlaygroundApiKey and resolvePlaygroundModel still return values when saved resources are missing', () => {
+  const data = {
+    apikeys: [],
+    models: [],
+  };
+
+  assert.equal(resolvePlaygroundApiKey(data, {
+    apiKeySelection: 'saved:missing-key',
+    customApiKey: '',
+  }), 'missing-key');
+  assert.equal(resolvePlaygroundModel(data, {
+    modelSelection: 'saved:missing-model',
+    customModel: '',
+  }), 'missing-model');
+});
+
+test('buildPlaygroundRequest creates non-streaming chat completion request', () => {
+  const request = buildPlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000/',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  });
+
+  assert.equal(request.url, 'http://127.0.0.1:4000/v1/chat/completions');
+  assert.equal(request.options.method, 'POST');
+  assert.equal(request.options.headers.get('authorization'), 'Bearer sk-demo-secret');
+  assert.equal(request.options.headers.get('content-type'), 'application/json');
+  assert.deepEqual(JSON.parse(request.options.body), {
+    model: 'gpt-4o-mini',
+    stream: false,
+    messages: [
+      { role: 'system', content: 'You are concise.' },
+      { role: 'user', content: 'Say hello.' },
+    ],
+  });
+});
+
+test('derivePlaygroundHints reports model, api key allowlist, and runtime status', () => {
+  const data = {
+    providers: [{ id: 'openai', kind: 'openai', base_url: 'https://api.openai.com', auth: { secret_ref: 'env:OPENAI_API_KEY' }, policy_id: null, rate_limit: null, cache: null }],
+    models: [{ id: 'gpt-4o-mini', provider_id: 'openai', upstream_model: 'gpt-4o-mini', policy_id: null, rate_limit: null, cache: null }],
+    apikeys: [{ id: 'demo', key: 'sk-demo-secret', allowed_models: ['gpt-4o-mini'], policy_id: null, rate_limit: null }],
+    policies: [],
+  };
+  const derived = deriveRelationshipModel(data);
+
+  const hints = derivePlaygroundHints(data, derived, {
+    modelSelection: 'saved:gpt-4o-mini',
+    customModel: '',
+    apiKeySelection: 'saved:demo',
+    customApiKey: '',
+  });
+
+  assert.equal(hints.modelExists.ok, true);
+  assert.equal(hints.apiKeyAllowsModel.ok, true);
+  assert.equal(hints.runtimeStatus.kind, 'valid');
+});
+
+test('extractAssistantText returns first assistant message text', () => {
+  const text = extractAssistantText({
+    choices: [
+      { message: { role: 'assistant', content: 'Hello from AISIX.' } },
+    ],
+  });
+
+  assert.equal(text, 'Hello from AISIX.');
+});
+
+test('classifyPlaygroundFailure maps response failures and network errors', () => {
+  assert.deepEqual(classifyPlaygroundFailure({ status: 401, message: 'bad key' }), {
+    category: 'auth_failed',
+    title: 'Auth failed',
+  });
+  assert.deepEqual(classifyPlaygroundFailure({ status: 400, message: 'bad request' }), {
+    category: 'invalid_request',
+    title: 'Invalid request',
+  });
+  assert.deepEqual(classifyPlaygroundFailure({ status: 503, message: 'upstream unavailable' }), {
+    category: 'upstream_error',
+    title: 'Upstream error',
+  });
+  assert.deepEqual(classifyPlaygroundFailure({ error: new Error('network down') }), {
+    category: 'network_error',
+    title: 'Network error',
+  });
+});
+
+test('executePlaygroundRequest returns success payload with latency and assistant text', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => ({
+      id: 'chatcmpl-123',
+      model: 'gpt-4o-mini',
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      choices: [{ message: { role: 'assistant', content: 'Hello.' } }],
+    }),
+  }), () => 1000);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, 200);
+  assert.equal(result.assistantText, 'Hello.');
+  assert.equal(result.durationMs, 0);
+  assert.equal(result.responseBody.id, 'chatcmpl-123');
+});
 
 test('buildResourcePayload normalizes provider form fields', () => {
   const payload = buildResourcePayload('providers', {
@@ -315,4 +498,10 @@ test('workspace layout prevents empty list panel from stretching vertically', ()
 
   assert.match(html, /\.workspace\s*\{[\s\S]*align-items:\s*start;/);
   assert.match(html, /\.main\s*\{[\s\S]*align-content:\s*start;/);
+});
+
+test('playground hints copy states that checks do not block live requests', () => {
+  const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /Local checks only\. They do not block sending the live request\./);
 });

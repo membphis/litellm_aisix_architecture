@@ -88,6 +88,210 @@ const COLLECTIONS = {
 const hasBrowserDom = typeof document !== 'undefined';
 const hasSessionStorage = typeof sessionStorage !== 'undefined';
 const ADMIN_KEY_STORAGE_KEY = 'aisix-admin-key';
+const PLAYGROUND_VIEW = 'playground';
+const RESOURCE_VIEW = 'resources';
+export function defaultPlaygroundBaseUrl(hostname = '127.0.0.1', protocol = 'http') {
+  return `${protocol}://${hostname}:4000`;
+}
+
+function browserPlaygroundBaseUrl() {
+  if (!hasBrowserDom || !window.location?.hostname) {
+    return defaultPlaygroundBaseUrl();
+  }
+  const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
+  return defaultPlaygroundBaseUrl(window.location.hostname, protocol);
+}
+
+function createInitialPlaygroundState() {
+  return {
+    baseUrl: browserPlaygroundBaseUrl(),
+    apiKeySelection: 'saved:',
+    customApiKey: '',
+    modelSelection: 'saved:',
+    customModel: '',
+    systemPrompt: 'You are a concise assistant.',
+    userMessage: 'Say hello in one sentence.',
+    requestState: 'idle',
+    result: null,
+    lastRequestPreview: null,
+  };
+}
+
+export function nextPlaygroundFormState(current, values) {
+  return {
+    ...current,
+    baseUrl: String(values.base_url ?? current.baseUrl ?? '').trim(),
+    apiKeySelection: String(values.api_key_selection ?? current.apiKeySelection ?? 'saved:'),
+    customApiKey: String(values.custom_api_key ?? current.customApiKey ?? ''),
+    modelSelection: String(values.model_selection ?? current.modelSelection ?? 'saved:'),
+    customModel: String(values.custom_model ?? current.customModel ?? ''),
+    systemPrompt: String(values.system_prompt ?? current.systemPrompt ?? ''),
+    userMessage: String(values.user_message ?? current.userMessage ?? '').trim(),
+  };
+}
+
+function selectedPlaygroundId(selection, prefix) {
+  if (!String(selection ?? '').startsWith(prefix)) {
+    return '';
+  }
+  return String(selection).slice(prefix.length);
+}
+
+function playgroundSelectedApiKey(data, selection) {
+  const selectedApiKeyId = selectedPlaygroundId(selection, 'saved:');
+  return data.apikeys.find((item) => item.id === selectedApiKeyId) ?? null;
+}
+
+function playgroundSelectedModel(data, selection) {
+  const selectedModelId = selectedPlaygroundId(selection, 'saved:');
+  return data.models.find((item) => item.id === selectedModelId) ?? null;
+}
+
+function normalizeBaseUrl(baseUrl) {
+  return String(baseUrl ?? '').trim().replace(/\/+$/, '');
+}
+
+export function buildPlaygroundRequest({ baseUrl, apiKey, model, systemPrompt, userMessage }) {
+  const headers = new Headers();
+  headers.set('authorization', `Bearer ${String(apiKey).trim()}`);
+  headers.set('content-type', 'application/json');
+
+  const messages = [];
+  if (String(systemPrompt ?? '').trim()) {
+    messages.push({ role: 'system', content: String(systemPrompt).trim() });
+  }
+  messages.push({ role: 'user', content: String(userMessage ?? '').trim() });
+
+  return {
+    url: `${normalizeBaseUrl(baseUrl)}/v1/chat/completions`,
+    options: {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: String(model ?? '').trim(),
+        stream: false,
+        messages,
+      }),
+    },
+  };
+}
+
+export function derivePlaygroundHints(data, derived, selection) {
+  const modelId = resolvePlaygroundModel(data, selection);
+  const apiKey = selection.apiKeySelection !== 'custom'
+    ? playgroundSelectedApiKey(data, selection.apiKeySelection)
+    : null;
+  const model = derived.models.byId[modelId] ?? null;
+  const allowsModel = apiKey ? apiKey.allowed_models.includes(modelId) : null;
+
+  return {
+    modelExists: {
+      ok: Boolean(model),
+      message: model ? 'Model exists in admin config.' : `Model '${modelId || 'unknown'}' is not present in admin config.`,
+    },
+    apiKeyAllowsModel: {
+      ok: allowsModel === null ? null : allowsModel,
+      message: apiKey
+        ? allowsModel
+          ? `API key '${apiKey.id}' allows this model.`
+          : `API key '${apiKey.id}' does not allow this model.`
+        : 'Manual API key selected. Allowlist cannot be checked locally.',
+    },
+    runtimeStatus: model?.status ?? {
+      kind: 'orphaned',
+      label: 'Unknown',
+      message: 'Runtime status is unknown until the model exists in admin config.',
+    },
+  };
+}
+
+export function resolvePlaygroundApiKey(data, selection) {
+  if (selection.apiKeySelection === 'custom') {
+    return String(selection.customApiKey ?? '').trim();
+  }
+  return playgroundSelectedApiKey(data, selection.apiKeySelection)?.key ?? selectedPlaygroundId(selection.apiKeySelection, 'saved:');
+}
+
+export function resolvePlaygroundModel(data, selection) {
+  if (selection.modelSelection === 'custom') {
+    return String(selection.customModel ?? '').trim();
+  }
+  return playgroundSelectedModel(data, selection.modelSelection)?.id ?? selectedPlaygroundId(selection.modelSelection, 'saved:');
+}
+
+export function extractAssistantText(payload) {
+  const firstChoice = payload?.choices?.[0];
+  const content = firstChoice?.message?.content;
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => item?.text ?? '')
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
+}
+
+export function classifyPlaygroundFailure({ status, error }) {
+  if (error) {
+    return { category: 'network_error', title: 'Network error' };
+  }
+  if (status === 400) {
+    return { category: 'invalid_request', title: 'Invalid request' };
+  }
+  if (status === 401 || status === 403) {
+    return { category: 'auth_failed', title: 'Auth failed' };
+  }
+  if (status === 404 || status === 422) {
+    return { category: 'model_rejected', title: 'Model rejected' };
+  }
+  return { category: 'upstream_error', title: 'Upstream error' };
+}
+
+export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl = Date.now) {
+  const request = buildPlaygroundRequest(input);
+  const startedAt = nowImpl();
+  try {
+    const response = await fetchImpl(request.url, request.options);
+    const finishedAt = nowImpl();
+    const contentType = response.headers?.get?.('content-type') ?? '';
+    const responseBody = contentType.includes('application/json') ? await response.json() : await response.text();
+
+    if (response.ok) {
+      return {
+        ok: true,
+        status: response.status,
+        durationMs: Math.max(0, finishedAt - startedAt),
+        assistantText: extractAssistantText(responseBody),
+        responseBody,
+        request,
+      };
+    }
+
+    const failure = classifyPlaygroundFailure({ status: response.status });
+    return {
+      ok: false,
+      status: response.status,
+      durationMs: Math.max(0, finishedAt - startedAt),
+      error: failure,
+      assistantText: '',
+      responseBody,
+      request,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: null,
+      durationMs: Math.max(0, nowImpl() - startedAt),
+      error: classifyPlaygroundFailure({ error }),
+      assistantText: '',
+      responseBody: String(error.message ?? error),
+      request,
+    };
+  }
+}
 
 function adminKeyStorage() {
   if (adminKeyStorageMode() !== 'session' || !hasSessionStorage) {
@@ -111,6 +315,7 @@ const state = {
   adminKeyValid: restoreAdminKeyValidity(initialAdminKey),
   adminKeyError: '',
   isValidatingAdminKey: false,
+  activeView: RESOURCE_VIEW,
   activeCollection: 'providers',
   data: {
     providers: [],
@@ -129,6 +334,7 @@ const state = {
   connectionState: 'idle',
   lastRefreshed: null,
   flashRevision: null,
+  playground: createInitialPlaygroundState(),
 };
 
 const appRoot = hasBrowserDom ? document.querySelector('#app') : null;
@@ -160,6 +366,9 @@ function render() {
     adminKeyValid: state.adminKeyValid,
     draftMode: state.draftMode,
   });
+  const playgroundHints = derivePlaygroundHints(state.data, derived, state.playground);
+  const statusTitle = state.activeView === PLAYGROUND_VIEW ? 'Playground' : resourceConfig.label;
+  const statusPath = state.activeView === PLAYGROUND_VIEW ? 'POST /v1/chat/completions' : resourceConfig.path;
 
   appRoot.innerHTML = `
     <div class="layout">
@@ -168,10 +377,14 @@ function render() {
           <h1>AISIX Control Plane</h1>
         </div>
         <div class="nav" style="margin-top: 18px;">
+          <button class="${state.activeView === PLAYGROUND_VIEW ? 'active' : ''}" data-view="${PLAYGROUND_VIEW}" type="button">
+            <span>Playground</span>
+            <span class="count">live</span>
+          </button>
           ${Object.entries(COLLECTIONS)
             .map(
               ([key, value]) => `
-                <button class="${key === collection ? 'active' : ''}" data-nav="${key}" type="button">
+                <button class="${state.activeView === RESOURCE_VIEW && key === collection ? 'active' : ''}" data-nav="${key}" type="button">
                   <span>${value.label}</span>
                   <span class="count">${derived[key].items.length}</span>
                 </button>
@@ -183,8 +396,8 @@ function render() {
       <main class="main">
         <section class="status-bar">
           <div>
-            <strong>${resourceConfig.label}</strong>
-            <div class="muted">Current endpoint: ${resourceConfig.path}</div>
+            <strong>${statusTitle}</strong>
+            <div class="muted">Current endpoint: ${statusPath}</div>
           </div>
           <div class="status-grid">
             <span class="badge ${badgeClassForConnection()}">${connectionText()}</span>
@@ -194,9 +407,11 @@ function render() {
           </div>
         </section>
         <section class="workspace">
-          ${uiMode.mode === 'editing'
-            ? renderEditorView(editorCollection, editorValues, editorItem)
-            : renderListView(collection, items)}
+          ${state.activeView === PLAYGROUND_VIEW
+            ? renderPlaygroundView(playgroundHints)
+            : uiMode.mode === 'editing'
+              ? renderEditorView(editorCollection, editorValues, editorItem)
+              : renderListView(collection, items)}
         </section>
       </main>
     </div>
@@ -204,8 +419,10 @@ function render() {
   `;
 
   bindGlobalEvents();
-  bindTableEvents(items);
-  bindEditorEvents(editorItem);
+  if (state.activeView === RESOURCE_VIEW) {
+    bindTableEvents(items);
+    bindEditorEvents(editorItem);
+  }
 }
 
 function renderListView(collection, items) {
@@ -275,6 +492,144 @@ function renderEditorView(collection, values, item) {
             </div>
           </form>
         </section>
+      </div>
+    </div>
+  `;
+}
+
+function renderPlaygroundView(hints) {
+  const savedApiKeys = state.data.apikeys;
+  const models = state.data.models;
+  const result = state.playground.result;
+  const showCustomApiKey = state.playground.apiKeySelection === 'custom';
+  const showCustomModel = state.playground.modelSelection === 'custom';
+  return `
+    <div class="playground-grid">
+      <div class="panel playground-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Data Plane Playground</h2>
+            <div class="muted">This sends a real request to the data plane, not the Admin API.</div>
+          </div>
+        </div>
+        <form id="playground-form" class="form-grid">
+          <label>
+            Data Plane Base URL
+            <input name="base_url" type="text" value="${escapeHtml(state.playground.baseUrl)}" required />
+            <small>Defaults to the data plane port 4000.</small>
+          </label>
+          <label>
+            API Key
+            <select name="api_key_selection">
+              ${savedApiKeys.map((item) => `<option value="saved:${escapeHtml(item.id)}" ${state.playground.apiKeySelection === `saved:${item.id}` ? 'selected' : ''}>${escapeHtml(item.id)}</option>`).join('')}
+              <option value="custom" ${showCustomApiKey ? 'selected' : ''}>Custom</option>
+            </select>
+          </label>
+          ${showCustomApiKey
+            ? `<label>
+                API Key
+                <input name="custom_api_key" type="password" value="${escapeHtml(state.playground.customApiKey)}" placeholder="sk-..." required />
+              </label>`
+            : ''}
+          <label>
+            Model
+            <select name="model_selection">
+              ${models.map((item) => `<option value="saved:${escapeHtml(item.id)}" ${state.playground.modelSelection === `saved:${item.id}` ? 'selected' : ''}>${escapeHtml(item.id)}</option>`).join('')}
+              <option value="custom" ${showCustomModel ? 'selected' : ''}>Custom</option>
+            </select>
+          </label>
+          ${showCustomModel
+            ? `<label>
+                Model
+                <input name="custom_model" type="text" value="${escapeHtml(state.playground.customModel)}" placeholder="gpt-4o-mini" required />
+              </label>`
+            : ''}
+          <label>
+            System Prompt
+            <textarea name="system_prompt">${escapeHtml(state.playground.systemPrompt)}</textarea>
+          </label>
+          <label>
+            User Message
+            <textarea name="user_message" required>${escapeHtml(state.playground.userMessage)}</textarea>
+          </label>
+          <div class="form-actions">
+            <button class="button" type="submit" ${state.playground.requestState === 'submitting' ? 'disabled' : ''}>${state.playground.requestState === 'submitting' ? 'Sending...' : 'Send Test Request'}</button>
+          </div>
+        </form>
+      </div>
+      <div class="playground-side">
+        <div class="panel">
+          <div class="panel-header">
+                <div>
+                  <h2>Local Hints</h2>
+                  <div class="muted">Local checks only. They do not block sending the live request. Final truth comes from the live data-plane response.</div>
+                </div>
+              </div>
+          <div class="hint-list">
+            ${renderHintRow('Model exists in admin config', hints.modelExists.ok, hints.modelExists.message)}
+            ${renderHintRow('Selected API key allows model', hints.apiKeyAllowsModel.ok, hints.apiKeyAllowsModel.message)}
+            ${renderHintRow('Runtime relationship status', hints.runtimeStatus.kind === 'valid', hints.runtimeStatus.message)}
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <div>
+              <h2>Result</h2>
+              <div class="muted">Latest live probe against the data plane.</div>
+            </div>
+          </div>
+          ${renderPlaygroundResult(result)}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderHintRow(title, ok, message) {
+  const tone = ok == null ? '' : ok ? 'success' : 'warning';
+  const label = ok == null ? 'Manual check' : ok ? 'Looks good' : 'Check this';
+  return `
+    <div class="hint-row">
+      <div class="split-line">
+        <strong>${escapeHtml(title)}</strong>
+        <span class="badge ${tone}">${escapeHtml(label)}</span>
+      </div>
+      <div class="muted">${escapeHtml(message)}</div>
+    </div>
+  `;
+}
+
+function renderPlaygroundResult(result) {
+  if (!result) {
+    return '<div class="playground-empty muted">Send a live request to validate the selected configuration.</div>';
+  }
+
+  const tone = result.ok ? 'success' : 'danger';
+  const title = result.ok ? 'Data plane reachable' : result.error?.title ?? 'Request failed';
+  const responseBody = typeof result.responseBody === 'string' ? result.responseBody : JSON.stringify(result.responseBody, null, 2);
+  const requestBody = result.request?.options?.body ? JSON.stringify(JSON.parse(result.request.options.body), null, 2) : '{}';
+  const responseMeta = [];
+  if (result.status != null) responseMeta.push(`HTTP ${result.status}`);
+  responseMeta.push(`${result.durationMs} ms`);
+  if (result.responseBody?.usage) responseMeta.push(`Usage ${JSON.stringify(result.responseBody.usage)}`);
+
+  return `
+    <div class="playground-result">
+      <div class="status-line">
+        <span class="badge ${tone}">${escapeHtml(title)}</span>
+        ${responseMeta.map((segment) => `<span class="badge">${escapeHtml(segment)}</span>`).join('')}
+      </div>
+      <div class="playground-output">
+        <strong>Assistant</strong>
+        <pre>${escapeHtml(result.assistantText || 'No assistant text returned.')}</pre>
+      </div>
+      <div class="playground-output">
+        <strong>Request Preview</strong>
+        <pre>${escapeHtml(requestBody)}</pre>
+      </div>
+      <div class="playground-output">
+        <strong>Raw Response</strong>
+        <pre>${escapeHtml(responseBody)}</pre>
       </div>
     </div>
   `;
@@ -488,8 +843,15 @@ function bindGlobalEvents() {
     await refreshAll();
   });
 
+  document.querySelector('[data-view="playground"]')?.addEventListener('click', () => {
+    state.activeView = PLAYGROUND_VIEW;
+    Object.assign(state, finishEditorFlow());
+    render();
+  });
+
   document.querySelectorAll('[data-nav]').forEach((button) => {
     button.addEventListener('click', () => {
+      state.activeView = RESOURCE_VIEW;
       state.activeCollection = button.dataset.nav;
       Object.assign(state, finishEditorFlow());
       render();
@@ -520,6 +882,43 @@ function bindGlobalEvents() {
     Object.assign(state, startCreateAction(state.activeCollection));
     render();
   });
+
+  document.querySelector('#playground-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void submitPlaygroundForm(event.currentTarget);
+  });
+
+  document.querySelector('#playground-form')?.addEventListener('change', (event) => {
+    const form = event.currentTarget;
+    const values = Object.fromEntries(new FormData(form).entries());
+    state.playground = nextPlaygroundFormState(state.playground, values);
+    render();
+  });
+}
+
+async function submitPlaygroundForm(form) {
+  const formData = new FormData(form);
+  state.playground = {
+    ...nextPlaygroundFormState(state.playground, Object.fromEntries(formData.entries())),
+    requestState: 'submitting',
+  };
+  render();
+
+  const result = await executePlaygroundRequest({
+    baseUrl: state.playground.baseUrl,
+    apiKey: resolvePlaygroundApiKey(state.data, state.playground),
+    model: resolvePlaygroundModel(state.data, state.playground),
+    systemPrompt: state.playground.systemPrompt,
+    userMessage: state.playground.userMessage,
+  });
+
+  state.playground = {
+    ...state.playground,
+    requestState: result.ok ? 'success' : 'error',
+    result,
+    lastRequestPreview: result.request,
+  };
+  render();
 }
 
 function bindTableEvents(items) {
