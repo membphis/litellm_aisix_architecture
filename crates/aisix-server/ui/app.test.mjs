@@ -199,6 +199,12 @@ test('executePlaygroundRequest returns success payload with latency and assistan
       usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       choices: [{ message: { role: 'assistant', content: 'Hello.' } }],
     }),
+    text: async () => JSON.stringify({
+      id: 'chatcmpl-123',
+      model: 'gpt-4o-mini',
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      choices: [{ message: { role: 'assistant', content: 'Hello.' } }],
+    }),
   }), () => 1000);
 
   assert.equal(result.ok, true);
@@ -221,6 +227,7 @@ test('executePlaygroundRequest marks failed json responses as json format', asyn
     status: 401,
     headers: new Headers({ 'content-type': 'application/json' }),
     json: async () => ({ error: { message: 'bad key' } }),
+    text: async () => JSON.stringify({ error: { message: 'bad key' } }),
   }));
 
   assert.equal(result.ok, false);
@@ -253,6 +260,68 @@ test('executePlaygroundRequest marks failed text responses as text format', asyn
   });
 });
 
+test('executePlaygroundRequest preserves raw text when application/json body is invalid json', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: false,
+    status: 401,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => {
+      throw new Error('Unexpected token < in JSON');
+    },
+    text: async () => '<html>bad gateway</html>',
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'text');
+  assert.equal(result.responseBody, '<html>bad gateway</html>');
+  assert.deepEqual(result.error, {
+    category: 'auth_failed',
+    title: 'Auth failed',
+  });
+});
+
+test('executePlaygroundRequest parses valid application/problem+json responses as json', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: false,
+    status: 422,
+    headers: new Headers({ 'content-type': 'application/problem+json' }),
+    json: async () => ({
+      type: 'https://example.com/problem',
+      title: 'Invalid model',
+      detail: 'model not allowed',
+    }),
+    text: async () => JSON.stringify({
+      type: 'https://example.com/problem',
+      title: 'Invalid model',
+      detail: 'model not allowed',
+    }),
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'json');
+  assert.deepEqual(result.responseBody, {
+    type: 'https://example.com/problem',
+    title: 'Invalid model',
+    detail: 'model not allowed',
+  });
+  assert.deepEqual(result.error, {
+    category: 'model_rejected',
+    title: 'Model rejected',
+  });
+});
+
 test('executePlaygroundRequest marks network failures as text format', async () => {
   const result = await executePlaygroundRequest({
     baseUrl: 'http://127.0.0.1:4000',
@@ -272,7 +341,7 @@ test('executePlaygroundRequest marks network failures as text format', async () 
   });
 });
 
-test('executePlaygroundRequest keeps json format when json parsing fails', async () => {
+test('renderPlaygroundResult uses text response title when application/json body is invalid json', async () => {
   const result = await executePlaygroundRequest({
     baseUrl: 'http://127.0.0.1:4000',
     apiKey: 'sk-demo-secret',
@@ -286,10 +355,14 @@ test('executePlaygroundRequest keeps json format when json parsing fails', async
     json: async () => {
       throw new Error('Unexpected token < in JSON');
     },
+    text: async () => '<html>bad gateway</html>',
   }));
 
+  const html = app.renderPlaygroundResult(result);
+
   assert.equal(result.ok, false);
-  assert.equal(result.responseFormat, 'json');
+  assert.match(html, /<strong>Original Response<\/strong>/);
+  assert.doesNotMatch(html, /<strong>Original Response JSON<\/strong>/);
 });
 
 test('renderPlaygroundResult labels json failures with original request and json response titles', () => {

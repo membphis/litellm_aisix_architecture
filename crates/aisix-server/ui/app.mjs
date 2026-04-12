@@ -250,6 +250,26 @@ export function classifyPlaygroundFailure({ status, error }) {
   return { category: 'upstream_error', title: 'Upstream error' };
 }
 
+function isJsonMediaType(contentType) {
+  const mediaType = String(contentType ?? '').split(';', 1)[0].trim().toLowerCase();
+  return mediaType === 'application/json' || mediaType.endsWith('+json');
+}
+
+async function readPlaygroundResponseBody(response, contentType) {
+  const responseText = await response.text();
+  if (!isJsonMediaType(contentType)) {
+    return { responseFormat: 'text', responseBody: responseText };
+  }
+  try {
+    return {
+      responseFormat: 'json',
+      responseBody: JSON.parse(responseText),
+    };
+  } catch {
+    return { responseFormat: 'text', responseBody: responseText };
+  }
+}
+
 export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl = Date.now) {
   const request = buildPlaygroundRequest(input);
   const startedAt = nowImpl();
@@ -258,8 +278,9 @@ export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl
     const response = await fetchImpl(request.url, request.options);
     const finishedAt = nowImpl();
     const contentType = response.headers?.get?.('content-type') ?? '';
-    responseFormat = contentType.includes('application/json') ? 'json' : 'text';
-    const responseBody = contentType.includes('application/json') ? await response.json() : await response.text();
+    const parsedResponse = await readPlaygroundResponseBody(response, contentType);
+    responseFormat = parsedResponse.responseFormat;
+    const responseBody = parsedResponse.responseBody;
 
     if (response.ok) {
       return {
