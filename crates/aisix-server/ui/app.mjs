@@ -1210,7 +1210,6 @@ async function refreshAll() {
     state.derived = deriveRelationshipModel(state.data);
     state.connectionState = 'ready';
     state.lastRefreshed = Date.now();
-    await refreshOpenApiYaml();
     render();
   } catch (error) {
     if (!state.adminKeyValid) {

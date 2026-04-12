@@ -952,11 +952,16 @@ test('openapi view only auto-refreshes on first entry from idle state', () => {
   assert.doesNotMatch(source, /!state\.openapi\.content/);
 });
 
-test('refreshAll awaits openapi yaml refresh before returning', () => {
+test('refreshAll does not trigger openapi yaml refresh while openapi view still does', () => {
   const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+  const refreshAllMatch = source.match(/async function refreshAll\(\) \{([\s\S]*?)\n\}/);
 
-  assert.match(source, /await refreshOpenApiYaml\(\)/);
-  assert.doesNotMatch(source, /void refreshOpenApiYaml\(\)/);
+  assert.ok(refreshAllMatch);
+  assert.match(refreshAllMatch[1], /state\.lastRefreshed = Date\.now\(\);/);
+  assert.match(refreshAllMatch[1], /render\(\);/);
+  assert.doesNotMatch(refreshAllMatch[1], /refreshOpenApiYaml\(\)/);
+  assert.match(source, /state\.openapi\.loadState === 'idle'[\s\S]*await refreshOpenApiYaml\(\)/);
+  assert.match(source, /#refresh-openapi-button[\s\S]*await refreshOpenApiYaml\(\)/);
 });
 
 test('playground hints copy states that checks do not block live requests', () => {
