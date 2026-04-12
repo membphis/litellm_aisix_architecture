@@ -37,7 +37,7 @@ pub async fn proxy(
         .get(provider_id)
         .ok_or_else(|| GatewayError {
             kind: ErrorKind::Internal,
-            message: format!("provider '{}' not found", provider_id),
+            message: format!("provider '{provider_id}' not found"),
         })?;
     let codec = state.providers.resolve(provider)?;
 

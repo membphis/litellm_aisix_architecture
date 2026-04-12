@@ -21,6 +21,7 @@ http.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml = "0.9"
 tokio = { workspace = true, features = ["net"] }
 tracing = "0.1"
 tower-http = { version = "0.6", features = ["cors"] }

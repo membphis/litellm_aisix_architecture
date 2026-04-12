@@ -17,8 +17,11 @@ import {
   defaultPlaygroundBaseUrl,
   derivePlaygroundHints,
   buildReferenceOptions,
+  buildSchemaBackedFieldDefinitions,
   buildResourcePayload,
   deriveRelationshipModel,
+  defaultFormValues,
+  extractAdminPutSchema,
   extractAssistantText,
   finishEditorFlow,
   nextAdminUiMode,
@@ -437,6 +440,88 @@ test('buildResourcePayload normalizes provider form fields', () => {
   });
 });
 
+test('extractAdminPutSchema returns PUT request schema for a collection', () => {
+  const spec = {
+    paths: {
+      '/admin/providers/{id}': {
+        put: {
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['id', 'kind', 'base_url'],
+                  properties: {
+                    id: { type: 'string' },
+                    kind: { type: 'string', enum: ['openai', 'anthropic'] },
+                    base_url: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  assert.deepEqual(extractAdminPutSchema(spec, 'providers'), {
+    type: 'object',
+    required: ['id', 'kind', 'base_url'],
+    properties: {
+      id: { type: 'string' },
+      kind: { type: 'string', enum: ['openai', 'anthropic'] },
+      base_url: { type: 'string' },
+    },
+  });
+});
+
+test('buildSchemaBackedFieldDefinitions and defaultFormValues derive provider fields from spec', () => {
+  const schema = {
+    type: 'object',
+    required: ['id', 'kind', 'base_url', 'auth'],
+    properties: {
+      id: { type: 'string' },
+      kind: { type: 'string', enum: ['openai', 'anthropic'] },
+      base_url: { type: 'string' },
+      auth: {
+        type: 'object',
+        required: ['secret_ref'],
+        properties: {
+          secret_ref: { type: 'string' },
+        },
+      },
+      policy_id: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      cache: {
+        anyOf: [
+          {
+            type: 'object',
+            required: ['mode'],
+            properties: {
+              mode: { type: 'string', enum: ['inherit', 'enabled', 'disabled'] },
+            },
+          },
+          { type: 'null' },
+        ],
+      },
+    },
+  };
+
+  const fields = buildSchemaBackedFieldDefinitions('providers', schema);
+  assert.deepEqual(fields.map((field) => field.name), ['id', 'kind', 'base_url', 'secret_ref', 'policy_id', 'cache_mode']);
+  assert.equal(fields.find((field) => field.name === 'kind').type, 'select');
+  assert.deepEqual(fields.find((field) => field.name === 'kind').options, ['openai', 'anthropic']);
+  assert.equal(fields.find((field) => field.name === 'secret_ref').required, true);
+  assert.deepEqual(defaultFormValues('providers', fields), {
+    id: '',
+    kind: '',
+    base_url: '',
+    secret_ref: '',
+    policy_id: '',
+    cache_mode: '',
+  });
+});
+
 test('deriveRelationshipModel marks missing dependencies and reverse references', () => {
   const data = {
     providers: [],
@@ -700,6 +785,15 @@ test('workspace layout prevents empty list panel from stretching vertically', ()
 
   assert.match(html, /\.workspace\s*\{[\s\S]*align-items:\s*start;/);
   assert.match(html, /\.main\s*\{[\s\S]*align-content:\s*start;/);
+});
+
+test('sidebar includes OpenAPI link that opens yaml in a new window', () => {
+  const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /OpenAPI/);
+  assert.match(source, /\/openapi\/admin\.yaml/);
+  assert.match(source, /target="_blank"/);
+  assert.match(source, /rel="noreferrer"/);
 });
 
 test('playground hints copy states that checks do not block live requests', () => {

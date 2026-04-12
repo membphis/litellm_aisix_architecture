@@ -3,6 +3,7 @@ pub mod auth;
 pub mod models;
 pub mod policies;
 pub mod providers;
+pub mod validation;
 
 use std::{collections::HashSet, sync::Arc};
 

@@ -25,6 +25,10 @@ For example, a `model` write may arrive before the referenced `provider` write. 
 
 The browser UI is only a human-facing companion to this API. Operators enter the admin key manually in the UI, and the browser keeps it only in `sessionStorage` for the current session.
 
+The Admin listener exposes the machine-readable OpenAPI 3.1 contract at `/openapi/admin.yaml`.
+It also keeps `/openapi/admin.json` available for JSON consumers such as the embedded UI.
+The embedded UI uses that same contract as its schema source for Admin resource forms.
+
 ## Resources
 
 The Admin API currently supports four collections:
@@ -59,9 +63,16 @@ Each collection supports:
 ### Error Codes
 
 - `401 Unauthorized`: missing or invalid `x-admin-key`
-- `400 Bad Request`: invalid resource id or path/body id mismatch
+- `400 Bad Request`: invalid resource id, path/body id mismatch, unknown JSON fields, missing required fields, or invalid enum values
 - `404 Not Found`: missing resource on item `GET` or `DELETE`
 - `500 Internal Server Error`: etcd or server-side failure
+
+### OpenAPI-Backed Validation
+
+- `PUT` request bodies are validated against the Admin OpenAPI schema before the request enters the existing resource-specific logic.
+- Unknown fields are rejected.
+- Missing required fields are rejected.
+- Enum fields such as `kind` and `cache.mode` reject unsupported values.
 
 ## Response Shapes
 
@@ -110,6 +121,18 @@ This is intentional in the current API contract.
 ```bash
 curl -fsS http://127.0.0.1:4001/admin/providers \
   -H 'x-admin-key: change-me-admin-key'
+```
+
+### Fetch The OpenAPI Document
+
+```bash
+curl -fsS http://127.0.0.1:4001/openapi/admin.yaml
+```
+
+### Fetch The OpenAPI Document As JSON
+
+```bash
+curl -fsS http://127.0.0.1:4001/openapi/admin.json
 ```
 
 ### Get One Provider
