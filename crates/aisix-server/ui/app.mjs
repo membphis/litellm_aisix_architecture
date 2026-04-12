@@ -102,6 +102,12 @@ function createInitialOpenApiViewState() {
   };
 }
 
+function unauthorizedError() {
+  const error = new Error('Invalid admin key. Please try again.');
+  error.code = 'unauthorized';
+  return error;
+}
+
 export function viewStatusMeta({ activeView, activeCollection }) {
   if (activeView === PLAYGROUND_VIEW) {
     return {
@@ -438,6 +444,7 @@ const state = {
   lastRefreshed: null,
   flashRevision: null,
   playground: createInitialPlaygroundState(),
+  openapi: createInitialOpenApiViewState(),
   adminSpec: null,
   schemaFields: {},
 };
@@ -1150,6 +1157,7 @@ async function refreshAll() {
     state.derived = deriveRelationshipModel(state.data);
     state.connectionState = 'ready';
     state.lastRefreshed = Date.now();
+    await refreshOpenApiYaml();
     render();
   } catch (error) {
     if (!state.adminKeyValid) {
@@ -1157,6 +1165,43 @@ async function refreshAll() {
     }
     state.connectionState = 'error';
     showToast('Connection error', error.message, 'danger');
+    render();
+  }
+}
+
+export async function fetchOpenApiYaml(adminKey, fetchImpl = fetch) {
+  const response = await fetchImpl(OPENAPI_YAML_PATH, {
+    headers: { 'x-admin-key': String(adminKey ?? '').trim() },
+  });
+
+  if (response.status === 401) {
+    throw unauthorizedError();
+  }
+
+  const yaml = await response.text();
+  if (!response.ok) {
+    throw new Error(yaml);
+  }
+
+  return yaml;
+}
+
+async function refreshOpenApiYaml() {
+  state.openapi = nextOpenApiViewState(state.openapi, { type: 'loading' });
+  render();
+
+  try {
+    const content = await fetchOpenApiYaml(state.adminKey);
+    state.openapi = nextOpenApiViewState(state.openapi, { type: 'success', content });
+    render();
+  } catch (error) {
+    const message = String(error.message ?? error);
+    state.openapi = nextOpenApiViewState(state.openapi, { type: 'error', error: message });
+    if (error.code === 'unauthorized') {
+      handleUnauthorized();
+      return;
+    }
+    showToast('OpenAPI load failed', message, 'danger');
     render();
   }
 }

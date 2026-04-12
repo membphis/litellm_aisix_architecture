@@ -7,6 +7,7 @@ import {
   buildPlaygroundRequest,
   classifyPlaygroundFailure,
   executePlaygroundRequest,
+  fetchOpenApiYaml,
   nextPlaygroundFormState,
   nextOpenApiViewState,
   resolvePlaygroundApiKey,
@@ -671,6 +672,50 @@ test('nextOpenApiViewState tracks idle loading success and error states', () => 
   );
 });
 
+test('fetchOpenApiYaml loads yaml text with admin headers', async () => {
+  let captured;
+  const fetchImpl = async (url, options) => {
+    captured = { url, options };
+    return {
+      ok: true,
+      status: 200,
+      text: async () => 'openapi: 3.1.0\ninfo:\n  title: AISIX Admin API\n',
+    };
+  };
+
+  const yaml = await fetchOpenApiYaml('change-me-admin-key', fetchImpl);
+
+  assert.equal(captured.url, '/openapi/admin.yaml');
+  assert.equal(captured.options.headers['x-admin-key'], 'change-me-admin-key');
+  assert.match(yaml, /openapi: 3\.1\.0/);
+});
+
+test('fetchOpenApiYaml throws server text on non-401 failure', async () => {
+  await assert.rejects(
+    fetchOpenApiYaml('change-me-admin-key', async () => ({
+      ok: false,
+      status: 503,
+      text: async () => 'gateway unavailable',
+    })),
+    /gateway unavailable/,
+  );
+});
+
+test('fetchOpenApiYaml marks unauthorized failures with a stable code', async () => {
+  await assert.rejects(
+    fetchOpenApiYaml('bad-admin-key', async () => ({
+      ok: false,
+      status: 401,
+      text: async () => 'unauthorized',
+    })),
+    (error) => {
+      assert.equal(error.code, 'unauthorized');
+      assert.match(error.message, /invalid admin key/i);
+      return true;
+    },
+  );
+});
+
 test('admin key persistence stays session-scoped', () => {
   assert.equal(adminKeyStorageMode(), 'session');
 });
@@ -849,6 +894,13 @@ test('sidebar includes OpenAPI link that opens yaml in a new window', () => {
   assert.match(source, /\/openapi\/admin\.yaml/);
   assert.match(source, /target="_blank"/);
   assert.match(source, /rel="noreferrer"/);
+});
+
+test('refreshAll awaits openapi yaml refresh before returning', () => {
+  const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /await refreshOpenApiYaml\(\)/);
+  assert.doesNotMatch(source, /void refreshOpenApiYaml\(\)/);
 });
 
 test('playground hints copy states that checks do not block live requests', () => {
