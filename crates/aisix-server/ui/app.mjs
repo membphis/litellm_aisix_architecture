@@ -250,14 +250,37 @@ export function classifyPlaygroundFailure({ status, error }) {
   return { category: 'upstream_error', title: 'Upstream error' };
 }
 
+function isJsonMediaType(contentType) {
+  const mediaType = String(contentType ?? '').split(';', 1)[0].trim().toLowerCase();
+  return mediaType === 'application/json' || mediaType.endsWith('+json');
+}
+
+async function readPlaygroundResponseBody(response, contentType) {
+  const responseText = await response.text();
+  if (!isJsonMediaType(contentType)) {
+    return { responseFormat: 'text', responseBody: responseText };
+  }
+  try {
+    return {
+      responseFormat: 'json',
+      responseBody: JSON.parse(responseText),
+    };
+  } catch {
+    return { responseFormat: 'text', responseBody: responseText };
+  }
+}
+
 export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl = Date.now) {
   const request = buildPlaygroundRequest(input);
   const startedAt = nowImpl();
+  let responseFormat = 'text';
   try {
     const response = await fetchImpl(request.url, request.options);
     const finishedAt = nowImpl();
     const contentType = response.headers?.get?.('content-type') ?? '';
-    const responseBody = contentType.includes('application/json') ? await response.json() : await response.text();
+    const parsedResponse = await readPlaygroundResponseBody(response, contentType);
+    responseFormat = parsedResponse.responseFormat;
+    const responseBody = parsedResponse.responseBody;
 
     if (response.ok) {
       return {
@@ -265,6 +288,7 @@ export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl
         status: response.status,
         durationMs: Math.max(0, finishedAt - startedAt),
         assistantText: extractAssistantText(responseBody),
+        responseFormat,
         responseBody,
         request,
       };
@@ -277,6 +301,7 @@ export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl
       durationMs: Math.max(0, finishedAt - startedAt),
       error: failure,
       assistantText: '',
+      responseFormat,
       responseBody,
       request,
     };
@@ -287,6 +312,7 @@ export async function executePlaygroundRequest(input, fetchImpl = fetch, nowImpl
       durationMs: Math.max(0, nowImpl() - startedAt),
       error: classifyPlaygroundFailure({ error }),
       assistantText: '',
+      responseFormat,
       responseBody: String(error.message ?? error),
       request,
     };
@@ -599,7 +625,7 @@ function renderHintRow(title, ok, message) {
   `;
 }
 
-function renderPlaygroundResult(result) {
+export function renderPlaygroundResult(result) {
   if (!result) {
     return '<div class="playground-empty muted">Send a live request to validate the selected configuration.</div>';
   }
@@ -608,6 +634,7 @@ function renderPlaygroundResult(result) {
   const title = result.ok ? 'Data plane reachable' : result.error?.title ?? 'Request failed';
   const responseBody = typeof result.responseBody === 'string' ? result.responseBody : JSON.stringify(result.responseBody, null, 2);
   const requestBody = result.request?.options?.body ? JSON.stringify(JSON.parse(result.request.options.body), null, 2) : '{}';
+  const responseTitle = result.responseFormat === 'json' ? 'Original Response JSON' : 'Original Response';
   const responseMeta = [];
   if (result.status != null) responseMeta.push(`HTTP ${result.status}`);
   responseMeta.push(`${result.durationMs} ms`);
@@ -624,11 +651,11 @@ function renderPlaygroundResult(result) {
         <pre>${escapeHtml(result.assistantText || 'No assistant text returned.')}</pre>
       </div>
       <div class="playground-output">
-        <strong>Request Preview</strong>
+        <strong>Original Request JSON</strong>
         <pre>${escapeHtml(requestBody)}</pre>
       </div>
       <div class="playground-output">
-        <strong>Raw Response</strong>
+        <strong>${responseTitle}</strong>
         <pre>${escapeHtml(responseBody)}</pre>
       </div>
     </div>

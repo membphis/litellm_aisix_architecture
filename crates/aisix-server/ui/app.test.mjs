@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import * as app from './app.mjs';
 
 import {
   buildPlaygroundRequest,
@@ -198,13 +199,214 @@ test('executePlaygroundRequest returns success payload with latency and assistan
       usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
       choices: [{ message: { role: 'assistant', content: 'Hello.' } }],
     }),
+    text: async () => JSON.stringify({
+      id: 'chatcmpl-123',
+      model: 'gpt-4o-mini',
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      choices: [{ message: { role: 'assistant', content: 'Hello.' } }],
+    }),
   }), () => 1000);
 
   assert.equal(result.ok, true);
   assert.equal(result.status, 200);
   assert.equal(result.assistantText, 'Hello.');
   assert.equal(result.durationMs, 0);
+  assert.equal(result.responseFormat, 'json');
   assert.equal(result.responseBody.id, 'chatcmpl-123');
+});
+
+test('executePlaygroundRequest marks failed json responses as json format', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: false,
+    status: 401,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => ({ error: { message: 'bad key' } }),
+    text: async () => JSON.stringify({ error: { message: 'bad key' } }),
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'json');
+  assert.deepEqual(result.error, {
+    category: 'auth_failed',
+    title: 'Auth failed',
+  });
+});
+
+test('executePlaygroundRequest marks failed text responses as text format', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: false,
+    status: 503,
+    headers: new Headers({ 'content-type': 'text/plain' }),
+    text: async () => 'upstream unavailable',
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'text');
+  assert.deepEqual(result.error, {
+    category: 'upstream_error',
+    title: 'Upstream error',
+  });
+});
+
+test('executePlaygroundRequest preserves raw text when application/json body is invalid json', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: false,
+    status: 401,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => {
+      throw new Error('Unexpected token < in JSON');
+    },
+    text: async () => '<html>bad gateway</html>',
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'text');
+  assert.equal(result.responseBody, '<html>bad gateway</html>');
+  assert.deepEqual(result.error, {
+    category: 'auth_failed',
+    title: 'Auth failed',
+  });
+});
+
+test('executePlaygroundRequest parses valid application/problem+json responses as json', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: false,
+    status: 422,
+    headers: new Headers({ 'content-type': 'application/problem+json' }),
+    json: async () => ({
+      type: 'https://example.com/problem',
+      title: 'Invalid model',
+      detail: 'model not allowed',
+    }),
+    text: async () => JSON.stringify({
+      type: 'https://example.com/problem',
+      title: 'Invalid model',
+      detail: 'model not allowed',
+    }),
+  }));
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'json');
+  assert.deepEqual(result.responseBody, {
+    type: 'https://example.com/problem',
+    title: 'Invalid model',
+    detail: 'model not allowed',
+  });
+  assert.deepEqual(result.error, {
+    category: 'model_rejected',
+    title: 'Model rejected',
+  });
+});
+
+test('executePlaygroundRequest marks network failures as text format', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => {
+    throw new Error('network down');
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.responseFormat, 'text');
+  assert.deepEqual(result.error, {
+    category: 'network_error',
+    title: 'Network error',
+  });
+});
+
+test('renderPlaygroundResult uses text response title when application/json body is invalid json', async () => {
+  const result = await executePlaygroundRequest({
+    baseUrl: 'http://127.0.0.1:4000',
+    apiKey: 'sk-demo-secret',
+    model: 'gpt-4o-mini',
+    systemPrompt: 'You are concise.',
+    userMessage: 'Say hello.',
+  }, async () => ({
+    ok: false,
+    status: 401,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    json: async () => {
+      throw new Error('Unexpected token < in JSON');
+    },
+    text: async () => '<html>bad gateway</html>',
+  }));
+
+  const html = app.renderPlaygroundResult(result);
+
+  assert.equal(result.ok, false);
+  assert.match(html, /<strong>Original Response<\/strong>/);
+  assert.doesNotMatch(html, /<strong>Original Response JSON<\/strong>/);
+});
+
+test('renderPlaygroundResult labels json failures with original request and json response titles', () => {
+  const html = app.renderPlaygroundResult?.({
+    ok: false,
+    status: 401,
+    durationMs: 12,
+    error: { category: 'auth_failed', title: 'Auth failed' },
+    assistantText: '',
+    responseFormat: 'json',
+    responseBody: { error: { message: 'bad key' } },
+    request: {
+      options: {
+        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hello' }] }),
+      },
+    },
+  });
+
+  assert.equal(typeof app.renderPlaygroundResult, 'function');
+  assert.match(html, /<strong>Original Request JSON<\/strong>/);
+  assert.match(html, /<strong>Original Response JSON<\/strong>/);
+  assert.doesNotMatch(html, /<strong>Raw Response<\/strong>/);
+});
+
+test('renderPlaygroundResult labels text failures with original request and text response titles', () => {
+  const html = app.renderPlaygroundResult?.({
+    ok: false,
+    status: 503,
+    durationMs: 25,
+    error: { category: 'upstream_error', title: 'Upstream error' },
+    assistantText: '',
+    responseFormat: 'text',
+    responseBody: 'upstream unavailable',
+    request: {
+      options: {
+        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hello' }] }),
+      },
+    },
+  });
+
+  assert.equal(typeof app.renderPlaygroundResult, 'function');
+  assert.match(html, /<strong>Original Request JSON<\/strong>/);
+  assert.match(html, /<strong>Original Response<\/strong>/);
+  assert.doesNotMatch(html, /<strong>Original Response JSON<\/strong>/);
 });
 
 test('buildResourcePayload normalizes provider form fields', () => {
