@@ -34,6 +34,7 @@ import {
   maskApiKey,
   renderEditorSummary,
   renderField,
+  renderOpenApiView,
   startCreateAction,
   startEditAction,
   validateAdminKey,
@@ -716,6 +717,38 @@ test('fetchOpenApiYaml marks unauthorized failures with a stable code', async ()
   );
 });
 
+test('renderOpenApiView shows developer-facing copy and yaml content', () => {
+  const html = renderOpenApiView({
+    content: 'openapi: 3.1.0\ninfo:\n  title: AISIX Admin API\n',
+    loadState: 'ready',
+    error: '',
+  });
+
+  assert.match(html, /class="openapi-content"/);
+  assert.doesNotMatch(html, /playground-output/);
+  assert.match(html, /Admin OpenAPI Contract/);
+  assert.match(html, /OpenAPI 3\.1 contract/);
+  assert.match(html, /generate clients/i);
+  assert.match(html, /Open Raw YAML/);
+  assert.match(html, /openapi: 3\.1\.0/);
+});
+
+test('renderOpenApiView shows loading and error states', () => {
+  const loadingHtml = renderOpenApiView({
+    content: '',
+    loadState: 'loading',
+    error: '',
+  });
+  assert.match(loadingHtml, /Loading OpenAPI YAML/);
+
+  const errorHtml = renderOpenApiView({
+    content: '',
+    loadState: 'error',
+    error: 'network down',
+  });
+  assert.match(errorHtml, /network down/);
+});
+
 test('admin key persistence stays session-scoped', () => {
   assert.equal(adminKeyStorageMode(), 'session');
 });
@@ -887,13 +920,29 @@ test('workspace layout prevents empty list panel from stretching vertically', ()
   assert.match(html, /\.main\s*\{[\s\S]*align-content:\s*start;/);
 });
 
-test('sidebar includes OpenAPI link that opens yaml in a new window', () => {
+test('openapi content keeps baseline content container styling after decoupling', () => {
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+
+  assert.match(html, /\.openapi-content\s*\{[\s\S]*border:\s*1px solid var\(--border\);/);
+  assert.match(html, /\.openapi-content\s*\{[\s\S]*padding:\s*14px;/);
+  assert.match(html, /\.openapi-content pre\s*,[\s\S]*white-space:\s*pre-wrap;/);
+  assert.match(html, /\.openapi-content pre\s*,[\s\S]*font-family:\s*ui-monospace/);
+});
+
+test('sidebar groups resources and tools and keeps openapi as an in-app nav button', () => {
   const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
 
-  assert.match(source, /OpenAPI/);
-  assert.match(source, /\/openapi\/admin\.yaml/);
-  assert.match(source, /target="_blank"/);
-  assert.match(source, /rel="noreferrer"/);
+  assert.match(source, /Resources/);
+  assert.match(source, /Tools/);
+  assert.match(source, /data-view="\$\{OPENAPI_VIEW\}"/);
+  assert.doesNotMatch(source, /target="_blank"/);
+});
+
+test('openapi view only auto-refreshes on first entry from idle state', () => {
+  const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /state\.openapi\.loadState === 'idle'/);
+  assert.doesNotMatch(source, /!state\.openapi\.content/);
 });
 
 test('refreshAll awaits openapi yaml refresh before returning', () => {

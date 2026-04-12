@@ -498,10 +498,7 @@ function render() {
           <h1>AISIX Control Plane</h1>
         </div>
         <div class="nav" style="margin-top: 18px;">
-          <button class="${state.activeView === PLAYGROUND_VIEW ? 'active' : ''}" data-view="${PLAYGROUND_VIEW}" type="button">
-            <span>Playground</span>
-            <span class="count">live</span>
-          </button>
+          <div class="muted">Resources</div>
           ${Object.entries(COLLECTIONS)
             .map(
               ([key, value]) => `
@@ -512,10 +509,15 @@ function render() {
               `,
             )
             .join('')}
-          <a class="nav-link" href="${OPENAPI_YAML_PATH}" target="_blank" rel="noreferrer">
+          <div class="muted">Tools</div>
+          <button class="${state.activeView === PLAYGROUND_VIEW ? 'active' : ''}" data-view="${PLAYGROUND_VIEW}" type="button">
+            <span>Playground</span>
+            <span class="count">live</span>
+          </button>
+          <button class="${state.activeView === OPENAPI_VIEW ? 'active' : ''}" data-view="${OPENAPI_VIEW}" type="button">
             <span>OpenAPI</span>
             <span class="count">yaml</span>
-          </a>
+          </button>
         </div>
       </aside>
       <main class="main">
@@ -534,6 +536,8 @@ function render() {
         <section class="workspace">
           ${state.activeView === PLAYGROUND_VIEW
             ? renderPlaygroundView(playgroundHints)
+            : state.activeView === OPENAPI_VIEW
+              ? renderOpenApiView(state.openapi)
             : uiMode.mode === 'editing'
               ? renderEditorView(editorCollection, editorValues, editorItem)
               : renderListView(collection, items)}
@@ -705,6 +709,37 @@ function renderPlaygroundView(hints) {
           </div>
           ${renderPlaygroundResult(result)}
         </div>
+      </div>
+    </div>
+  `;
+}
+
+export function renderOpenApiView(openapiState) {
+  const nextState = openapiState ?? createInitialOpenApiViewState();
+  let content = '<div class="muted">OpenAPI YAML has not been loaded yet.</div>';
+
+  if (nextState.loadState === 'loading') {
+    content = '<div class="muted">Loading OpenAPI YAML...</div>';
+  } else if (nextState.loadState === 'error') {
+    content = `<div class="badge danger">${escapeHtml(nextState.error || 'OpenAPI load failed.')}</div>`;
+  } else if (nextState.loadState === 'ready') {
+    content = `<pre>${escapeHtml(nextState.content)}</pre>`;
+  }
+
+  return `
+    <div class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Admin OpenAPI Contract</h2>
+          <div class="muted">OpenAPI 3.1 contract for debugging admin endpoints, validating request shapes, generate clients, and wiring API tools.</div>
+        </div>
+        <div class="detail-actions">
+          <button class="secondary-button" type="button" id="refresh-openapi-button">Refresh</button>
+          <a class="secondary-button" href="${OPENAPI_YAML_PATH}">Open Raw YAML</a>
+        </div>
+      </div>
+      <div class="openapi-content">
+        ${content}
       </div>
     </div>
   `;
@@ -975,6 +1010,15 @@ function bindGlobalEvents() {
     render();
   });
 
+  document.querySelector(`[data-view="${OPENAPI_VIEW}"]`)?.addEventListener('click', async () => {
+    state.activeView = OPENAPI_VIEW;
+    Object.assign(state, finishEditorFlow());
+    render();
+    if (state.openapi.loadState === 'idle') {
+      await refreshOpenApiYaml();
+    }
+  });
+
   document.querySelectorAll('[data-nav]').forEach((button) => {
     button.addEventListener('click', () => {
       state.activeView = RESOURCE_VIEW;
@@ -1002,6 +1046,10 @@ function bindGlobalEvents() {
 
   document.querySelector('#refresh-button')?.addEventListener('click', () => {
     void refreshAll();
+  });
+
+  document.querySelector('#refresh-openapi-button')?.addEventListener('click', async () => {
+    await refreshOpenApiYaml();
   });
 
   document.querySelector('#create-button')?.addEventListener('click', () => {
