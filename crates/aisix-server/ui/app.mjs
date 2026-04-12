@@ -93,12 +93,14 @@ const OPENAPI_VIEW = 'openapi';
 const RESOURCE_VIEW = 'resources';
 const OPENAPI_YAML_PATH = '/openapi/admin.yaml';
 const OPENAPI_STATUS_PATH = `GET ${OPENAPI_YAML_PATH}`;
+const OPENAPI_COPY_RESET_DELAY_MS = 1500;
 
 function createInitialOpenApiViewState() {
   return {
     content: '',
     loadState: 'idle',
     error: '',
+    copyState: 'idle',
   };
 }
 
@@ -150,6 +152,7 @@ export function nextOpenApiViewState(
       ...current,
       loadState: 'loading',
       error: '',
+      copyState: 'idle',
     };
   }
 
@@ -159,6 +162,7 @@ export function nextOpenApiViewState(
       content: String(event.content ?? ''),
       loadState: 'ready',
       error: '',
+      copyState: 'idle',
     };
   }
 
@@ -167,10 +171,58 @@ export function nextOpenApiViewState(
       ...current,
       loadState: 'error',
       error: String(event.error ?? ''),
+      copyState: 'idle',
+    };
+  }
+
+  if (event.type === 'copy-success') {
+    return {
+      ...current,
+      copyState: 'copied',
+    };
+  }
+
+  if (event.type === 'copy-reset') {
+    return {
+      ...current,
+      copyState: 'idle',
     };
   }
 
   return current;
+}
+
+export function shouldFetchOpenApiOnTabEnter(openapiState) {
+  const nextState = openapiState ?? createInitialOpenApiViewState();
+  if (nextState.loadState === 'idle') {
+    return true;
+  }
+  return nextState.loadState === 'error' && !nextState.content;
+}
+
+export async function copyOpenApiToClipboard(openapiState, clipboard) {
+  const nextState = openapiState ?? createInitialOpenApiViewState();
+  if (nextState.loadState !== 'ready' || !nextState.content) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: 'unavailable',
+    };
+  }
+
+  try {
+    await clipboard.writeText(nextState.content);
+    return {
+      ok: true,
+      nextState: nextOpenApiViewState(nextState, { type: 'copy-success' }),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      skipped: false,
+      error: String(error.message ?? error),
+    };
+  }
 }
 
 export function defaultPlaygroundBaseUrl(hostname = '127.0.0.1', protocol = 'http') {
@@ -459,6 +511,7 @@ const ADMIN_PUT_SCHEMA_PATHS = {
 const appRoot = hasBrowserDom ? document.querySelector('#app') : null;
 const modalRoot = hasBrowserDom ? document.querySelector('#modal-root') : null;
 const toastRoot = hasBrowserDom ? document.querySelector('#toast-root') : null;
+let openApiCopyResetTimeout = null;
 
 function init() {
   if (!hasBrowserDom || !appRoot || !modalRoot || !toastRoot) {
@@ -721,6 +774,8 @@ function renderPlaygroundView(hints) {
 
 export function renderOpenApiView(openapiState) {
   const nextState = openapiState ?? createInitialOpenApiViewState();
+  const canCopy = nextState.loadState === 'ready' && Boolean(nextState.content);
+  const copyLabel = canCopy && nextState.copyState === 'copied' ? 'Copied' : 'Copy';
   let content = '<div class="muted">OpenAPI YAML has not been loaded yet.</div>';
 
   if (nextState.loadState === 'loading') {
@@ -739,11 +794,13 @@ export function renderOpenApiView(openapiState) {
           <div class="muted">OpenAPI 3.1 contract for debugging admin endpoints, validating request shapes, generate clients, and wiring API tools.</div>
         </div>
         <div class="detail-actions">
-          <button class="secondary-button" type="button" id="refresh-openapi-button">Refresh</button>
           <a class="secondary-button" href="${OPENAPI_YAML_PATH}">Open Raw YAML</a>
         </div>
       </div>
       <div class="openapi-code-block">
+        <div class="openapi-code-actions">
+          <button class="secondary-button" type="button" id="copy-openapi-button" ${canCopy ? '' : 'disabled'}>${copyLabel}</button>
+        </div>
         ${content}
       </div>
     </div>
@@ -1019,7 +1076,7 @@ function bindGlobalEvents() {
     state.activeView = OPENAPI_VIEW;
     Object.assign(state, finishEditorFlow());
     render();
-    if (state.openapi.loadState === 'idle') {
+    if (shouldFetchOpenApiOnTabEnter(state.openapi)) {
       await refreshOpenApiYaml();
     }
   });
@@ -1053,8 +1110,28 @@ function bindGlobalEvents() {
     void refreshAll();
   });
 
-  document.querySelector('#refresh-openapi-button')?.addEventListener('click', async () => {
-    await refreshOpenApiYaml();
+  document.querySelector('#copy-openapi-button')?.addEventListener('click', async () => {
+    const clipboard = navigator.clipboard;
+    // #copy-openapi-button still delegates to navigator.clipboard.writeText through the helper.
+    const result = await copyOpenApiToClipboard(state.openapi, clipboard);
+    if (!result.ok) {
+      if (!result.skipped) {
+        showToast('Copy failed', result.error, 'danger');
+      }
+      return;
+    }
+
+    state.openapi = result.nextState;
+    render();
+
+    if (openApiCopyResetTimeout) {
+      clearTimeout(openApiCopyResetTimeout);
+    }
+    openApiCopyResetTimeout = setTimeout(() => {
+      state.openapi = nextOpenApiViewState(state.openapi, { type: 'copy-reset' });
+      openApiCopyResetTimeout = null;
+      render();
+    }, OPENAPI_COPY_RESET_DELAY_MS);
   });
 
   document.querySelector('#create-button')?.addEventListener('click', () => {
