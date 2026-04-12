@@ -604,7 +604,7 @@ function renderHintRow(title, ok, message) {
   `;
 }
 
-function renderPlaygroundResult(result) {
+export function renderPlaygroundResult(result) {
   if (!result) {
     return '<div class="playground-empty muted">Send a live request to validate the selected configuration.</div>';
   }
@@ -613,6 +613,7 @@ function renderPlaygroundResult(result) {
   const title = result.ok ? 'Data plane reachable' : result.error?.title ?? 'Request failed';
   const responseBody = typeof result.responseBody === 'string' ? result.responseBody : JSON.stringify(result.responseBody, null, 2);
   const requestBody = result.request?.options?.body ? JSON.stringify(JSON.parse(result.request.options.body), null, 2) : '{}';
+  const responseTitle = result.responseFormat === 'json' ? 'Original Response JSON' : 'Original Response';
   const responseMeta = [];
   if (result.status != null) responseMeta.push(`HTTP ${result.status}`);
   responseMeta.push(`${result.durationMs} ms`);
@@ -629,11 +630,11 @@ function renderPlaygroundResult(result) {
         <pre>${escapeHtml(result.assistantText || 'No assistant text returned.')}</pre>
       </div>
       <div class="playground-output">
-        <strong>Request Preview</strong>
+        <strong>Original Request JSON</strong>
         <pre>${escapeHtml(requestBody)}</pre>
       </div>
       <div class="playground-output">
-        <strong>Raw Response</strong>
+        <strong>${responseTitle}</strong>
         <pre>${escapeHtml(responseBody)}</pre>
       </div>
     </div>

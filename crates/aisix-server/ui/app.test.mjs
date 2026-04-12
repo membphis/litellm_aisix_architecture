@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import * as app from './app.mjs';
 
 import {
   buildPlaygroundRequest,
@@ -289,6 +290,50 @@ test('executePlaygroundRequest keeps json format when json parsing fails', async
 
   assert.equal(result.ok, false);
   assert.equal(result.responseFormat, 'json');
+});
+
+test('renderPlaygroundResult labels json failures with original request and json response titles', () => {
+  const html = app.renderPlaygroundResult?.({
+    ok: false,
+    status: 401,
+    durationMs: 12,
+    error: { category: 'auth_failed', title: 'Auth failed' },
+    assistantText: '',
+    responseFormat: 'json',
+    responseBody: { error: { message: 'bad key' } },
+    request: {
+      options: {
+        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hello' }] }),
+      },
+    },
+  });
+
+  assert.equal(typeof app.renderPlaygroundResult, 'function');
+  assert.match(html, /<strong>Original Request JSON<\/strong>/);
+  assert.match(html, /<strong>Original Response JSON<\/strong>/);
+  assert.doesNotMatch(html, /<strong>Raw Response<\/strong>/);
+});
+
+test('renderPlaygroundResult labels text failures with original request and text response titles', () => {
+  const html = app.renderPlaygroundResult?.({
+    ok: false,
+    status: 503,
+    durationMs: 25,
+    error: { category: 'upstream_error', title: 'Upstream error' },
+    assistantText: '',
+    responseFormat: 'text',
+    responseBody: 'upstream unavailable',
+    request: {
+      options: {
+        body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hello' }] }),
+      },
+    },
+  });
+
+  assert.equal(typeof app.renderPlaygroundResult, 'function');
+  assert.match(html, /<strong>Original Request JSON<\/strong>/);
+  assert.match(html, /<strong>Original Response<\/strong>/);
+  assert.doesNotMatch(html, /<strong>Original Response JSON<\/strong>/);
 });
 
 test('buildResourcePayload normalizes provider form fields', () => {
