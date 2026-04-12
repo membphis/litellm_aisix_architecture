@@ -92,6 +92,22 @@ test('resolvePlaygroundApiKey and resolvePlaygroundModel prefer saved selections
   }), 'gpt-4.1-mini');
 });
 
+test('resolvePlaygroundApiKey and resolvePlaygroundModel still return values when saved resources are missing', () => {
+  const data = {
+    apikeys: [],
+    models: [],
+  };
+
+  assert.equal(resolvePlaygroundApiKey(data, {
+    apiKeySelection: 'saved:missing-key',
+    customApiKey: '',
+  }), 'missing-key');
+  assert.equal(resolvePlaygroundModel(data, {
+    modelSelection: 'saved:missing-model',
+    customModel: '',
+  }), 'missing-model');
+});
+
 test('buildPlaygroundRequest creates non-streaming chat completion request', () => {
   const request = buildPlaygroundRequest({
     baseUrl: 'http://127.0.0.1:4000/',
@@ -482,4 +498,10 @@ test('workspace layout prevents empty list panel from stretching vertically', ()
 
   assert.match(html, /\.workspace\s*\{[\s\S]*align-items:\s*start;/);
   assert.match(html, /\.main\s*\{[\s\S]*align-content:\s*start;/);
+});
+
+test('playground hints copy states that checks do not block live requests', () => {
+  const source = readFileSync(new URL('./app.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /Local checks only\. They do not block sending the live request\./);
 });

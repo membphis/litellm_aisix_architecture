@@ -209,7 +209,7 @@ export function resolvePlaygroundApiKey(data, selection) {
   if (selection.apiKeySelection === 'custom') {
     return String(selection.customApiKey ?? '').trim();
   }
-  return playgroundSelectedApiKey(data, selection.apiKeySelection)?.key ?? '';
+  return playgroundSelectedApiKey(data, selection.apiKeySelection)?.key ?? selectedPlaygroundId(selection.apiKeySelection, 'saved:');
 }
 
 export function resolvePlaygroundModel(data, selection) {
@@ -560,11 +560,11 @@ function renderPlaygroundView(hints) {
       <div class="playground-side">
         <div class="panel">
           <div class="panel-header">
-            <div>
-              <h2>Local Hints</h2>
-              <div class="muted">Helpful checks from admin config. Final truth comes from the live data-plane response.</div>
-            </div>
-          </div>
+                <div>
+                  <h2>Local Hints</h2>
+                  <div class="muted">Local checks only. They do not block sending the live request. Final truth comes from the live data-plane response.</div>
+                </div>
+              </div>
           <div class="hint-list">
             ${renderHintRow('Model exists in admin config', hints.modelExists.ok, hints.modelExists.message)}
             ${renderHintRow('Selected API key allows model', hints.apiKeyAllowsModel.ok, hints.apiKeyAllowsModel.message)}
